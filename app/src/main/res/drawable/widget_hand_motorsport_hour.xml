@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="240dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <!-- Motorsport M Hour Hand (length 0.50R = 60 units, silver + white inner stripe) -->
+    <path
+        android:pathData="M120,126 L120,60"
+        android:strokeWidth="7"
+        android:strokeColor="#E2E8F0"
+        android:strokeLineCap="butt" />
+    <path
+        android:pathData="M120,124 L120,64"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="butt" />
+</vector>

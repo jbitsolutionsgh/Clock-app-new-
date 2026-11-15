@@ -1,0 +1,6 @@
+{
+  "name": "AuraClock",
+  "description": "Offline classroom timer, watch faces, earbud time announcer, widget, and Stand By screensaver.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

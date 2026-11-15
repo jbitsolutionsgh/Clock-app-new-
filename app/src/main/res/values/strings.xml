@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">AuraClock</string>
+    <string name="timer_stop">Stop</string>
+    <string name="widget_motorsport_name">AuraClock • Motorsport M</string>
+    <string name="widget_speedmaster_name">AuraClock • Speedmaster</string>
+    <string name="widget_minimal_name">AuraClock • Minimal</string>
+    <string name="widget_digital_name">AuraClock • Digital</string>
+    <string name="standby_dream_label">AuraClock Stand By</string>
+</resources>

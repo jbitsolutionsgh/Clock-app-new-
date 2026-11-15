@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="240dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <!-- Transparent minimal dial ring and cardinal indices -->
+    <path
+        android:pathData="M120,8 A112,112 0 1,1 119.99,8 Z"
+        android:strokeWidth="2.5"
+        android:strokeColor="#66FFFFFF" />
+    <path
+        android:pathData="M120,14 L120,30 M120,210 L120,226 M14,120 L30,120 M210,120 L226,120"
+        android:strokeWidth="4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M173,28 L166,40 M212,67 L200,74 M212,173 L200,166 M173,212 L166,200 M67,212 L74,200 M28,173 L40,166 M28,67 L40,74 M67,28 L74,40"
+        android:strokeWidth="2.2"
+        android:strokeColor="#B3E2E8F0"
+        android:strokeLineCap="round" />
+</vector>

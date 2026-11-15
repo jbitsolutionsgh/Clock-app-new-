@@ -1,0 +1,100 @@
+package com.example.core
+
+import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * Core chiplet contracts and shared models.
+ * Holds small interfaces so other chiplets communicate only through core.
+ */
+
+enum class AuraThemeColor(
+  val id: String,
+  val label: String,
+  val primary: Color,
+  val primaryArgb: Int,
+  val container: Color,
+) {
+  COBALT("cobalt", "Electric Cobalt", Color(0xFF3B82F6), 0xFF3B82F6.toInt(), Color(0xFF0F2547)),
+  CRIMSON("crimson", "Motorsport Red", Color(0xFFE00424), 0xFFE00424.toInt(), Color(0xFF420A13)),
+  GOLD("gold", "Racing Gold", Color(0xFFD4AF37), 0xFFD4AF37.toInt(), Color(0xFF3B300D)),
+  EMERALD("emerald", "Classroom Emerald", Color(0xFF10B981), 0xFF10B981.toInt(), Color(0xFF083325)),
+  AMBER("amber", "Warm Amber", Color(0xFFF59E0B), 0xFFF59E0B.toInt(), Color(0xFF3D2704)),
+  ICE("ice", "Crisp Ice", Color(0xFFE2E8F0), 0xFFE2E8F0.toInt(), Color(0xFF1E293B));
+
+  companion object {
+    /** Finds a theme colour by persisted ID, defaulting to Electric Cobalt. */
+    fun fromId(id: String?): AuraThemeColor =
+      entries.firstOrNull { it.id == id } ?: COBALT
+  }
+}
+
+enum class TimerPhase {
+  IDLE,
+  RUNNING,
+  PAUSED,
+  GAP_WAIT,
+  FINISHED,
+}
+
+data class TimerSnapshot(
+  val phase: TimerPhase = TimerPhase.IDLE,
+  val totalDurationMs: Long = 60_000L,
+  val remainingMs: Long = 60_000L,
+  val gapRemainingMs: Long = 0L,
+  val roundNumber: Int = 1,
+  val currentSpeaker: Int = 1,
+  val isRinging: Boolean = false,
+)
+
+/** Public entry interface for controlling the classroom countdown timer across chiplets. */
+interface TimerController {
+  val state: StateFlow<TimerSnapshot>
+  fun setDurationSeconds(seconds: Int)
+  fun startOrPause()
+  fun reset()
+  fun stop()
+  fun silenceBeep()
+}
+
+data class StopwatchSnapshot(
+  val isRunning: Boolean = false,
+  val elapsedMs: Long = 0L,
+  val lapsMs: List<Long> = emptyList(),
+)
+
+/** Public entry interface for controlling the stopwatch across chiplets. */
+interface StopwatchController {
+  val state: StateFlow<StopwatchSnapshot>
+  fun startOrPause()
+  fun reset()
+  fun lap()
+}
+
+/** Public entry interface for cycling watch faces from external triggers such as earbuds. */
+interface FaceNavigator {
+  fun nextFace()
+  fun getFaceOptions(): List<Pair<String, String>>
+}
+
+data class EarbudDiagnostics(
+  val serviceRunning: Boolean = false,
+  val ttsReady: Boolean = false,
+  val ttsStatus: String = "Initializing...",
+  val lastKeyCodeLabel: String = "None",
+  val lastKeyTimeLabel: String = "Never",
+  val lastActionExecuted: String = "None",
+)
+
+/** Public entry interface for starting, stopping, and observing the earbud listener service. */
+interface EarbudController {
+  val diagnostics: StateFlow<EarbudDiagnostics>
+  fun setListenerEnabled(enabled: Boolean)
+  fun ensureStarted()
+}
+
+/** Public contract allowing the Stand By DreamService to render a clock face via core. */
+fun interface StandByClockRenderer {
+  @androidx.compose.runtime.Composable
+  fun Render(useSelectedFace: Boolean, modifier: androidx.compose.ui.Modifier)
+}
