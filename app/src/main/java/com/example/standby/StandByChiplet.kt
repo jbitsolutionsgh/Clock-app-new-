@@ -338,7 +338,7 @@ object StandByChiplet {
                       .background(MaterialTheme.colorScheme.surfaceVariant)
                       .clickable {
                         val updated = if (checked) selectedIds - cal.id else selectedIds + cal.id
-                        prefs.setSelectedCalendarIds(updated)
+                        prefs.setSelectedCalendarIds(updated, userEdited = true)
                         coordinator.refreshNow()
                       }
                       .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -375,7 +375,7 @@ object StandByChiplet {
                       checked = checked,
                       onCheckedChange = { isChecked ->
                         val updated = if (isChecked) selectedIds + cal.id else selectedIds - cal.id
-                        prefs.setSelectedCalendarIds(updated)
+                        prefs.setSelectedCalendarIds(updated, userEdited = true)
                         coordinator.refreshNow()
                       },
                     )
@@ -435,6 +435,8 @@ object StandByChiplet {
       StandByStage(
         coordinator = coordinator,
         prefs = prefs,
+        applyDimAlpha = true,
+        isDreamService = false,
         modifier = Modifier.fillMaxSize(),
       )
     }

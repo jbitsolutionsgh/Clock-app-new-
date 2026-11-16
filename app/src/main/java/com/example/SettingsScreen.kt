@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
@@ -110,6 +111,8 @@ fun SettingsScreen(
   val useAlarmStream by prefs.useAlarmStream.collectAsStateWithLifecycle()
   val soundUri by prefs.soundUri.collectAsStateWithLifecycle()
   val soundName by prefs.soundName.collectAsStateWithLifecycle()
+  val timerFullScreenByDefault by prefs.timerFullScreenByDefault.collectAsStateWithLifecycle()
+  val timerGoFullScreenOnStart by prefs.timerGoFullScreenOnStart.collectAsStateWithLifecycle()
 
   val earbudEnabled by prefs.earbudEnabled.collectAsStateWithLifecycle()
   val playPauseAction by prefs.playPauseActionId.collectAsStateWithLifecycle()
@@ -263,6 +266,49 @@ fun SettingsScreen(
           checked = useAlarmStream,
           onCheckedChange = { prefs.setUseAlarmStream(it) },
           modifier = Modifier.testTag("settings_alarm_stream_switch"),
+        )
+      }
+    }
+
+    // 1b. Timer Display (Full-Screen Classroom Options)
+    SettingsCard(title = "Full-Screen Timer", icon = Icons.Default.Fullscreen) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("Full-screen timer by default", style = MaterialTheme.typography.titleMedium)
+          Text(
+            text = "Opens the Timer tab in full-screen mode",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = timerFullScreenByDefault,
+          onCheckedChange = { prefs.setTimerFullScreenByDefault(it) },
+          modifier = Modifier.testTag("settings_timer_fullscreen_default_switch"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("Go full screen when the timer starts", style = MaterialTheme.typography.titleMedium)
+          Text(
+            text = "Automatically expands when you press Start",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Switch(
+          checked = timerGoFullScreenOnStart,
+          onCheckedChange = { prefs.setTimerGoFullScreenOnStart(it) },
+          modifier = Modifier.testTag("settings_timer_fullscreen_on_start_switch"),
         )
       }
     }

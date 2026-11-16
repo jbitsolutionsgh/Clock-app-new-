@@ -117,10 +117,14 @@ data class StandByDiagnostics(
   val calendarsFoundCount: Int = 0,
   val eventsFoundCount: Int = 0,
   val lastRefreshTimeLabel: String = "Never",
+  val standByLastStartedLabel: String = "Never",
+  val standByLastEventCount: Int = 0,
 )
 
-/** Public contract in core so DiagnosticsScreen can read Stand By calendar status without importing standby. */
+/** Public contract in core so DiagnosticsScreen and StandByStage can track Stand By status via core. */
 interface StandByDiagnosticsProvider {
   val diagnostics: StateFlow<StandByDiagnostics>
   fun refreshNow()
+  fun recordDreamStarted(startedTimeLabel: String)
+  fun recordDreamEventsShown(count: Int)
 }

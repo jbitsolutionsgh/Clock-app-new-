@@ -59,6 +59,8 @@ class StandByDreamService : DreamService(), LifecycleOwner, SavedStateRegistryOw
           StandByStage(
             coordinator = coordinator,
             prefs = prefs,
+            applyDimAlpha = false,
+            isDreamService = true,
             modifier = Modifier,
           )
         }

@@ -2,6 +2,7 @@ package com.example.standby
 
 import android.content.Context
 import android.provider.CalendarContract
+import com.example.core.CrashCatcher
 import com.example.core.StandByCalendarWindow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,7 +12,7 @@ import java.util.TimeZone
 /**
  * Queries the device's local CalendarContract database off the main thread.
  * Handles repeating instances, UTC-midnight all-day conversion, cancelled/declined filtering,
- * and missing-permission SecurityExceptions without crashing.
+ * missing-permission SecurityExceptions, and records unexpected errors via CrashCatcher.
  */
 internal class DeviceCalendarProvider(
   private val context: Context,
@@ -20,14 +21,86 @@ internal class DeviceCalendarProvider(
 
   private val appContext = context.applicationContext
 
+  internal data class CalendarListResult(
+    val calendars: List<DeviceCalendarInfo> = emptyList(),
+    val googleCalendarIds: Set<Long> = emptySet(),
+    val permissionDenied: Boolean = false,
+    val errorMessage: String? = null,
+  )
+
+  internal data class UpcomingEventsResult(
+    val events: List<CalendarEventSummary> = emptyList(),
+    val permissionDenied: Boolean = false,
+    val errorMessage: String? = null,
+  )
+
   /** Queries visible device calendars for ID, display name, account name, and colour. */
-  override suspend fun listAvailableCalendars(): List<DeviceCalendarInfo> = withContext(Dispatchers.IO) {
-    queryCalendarsInternal().map { it.info }
-  }
+  override suspend fun listAvailableCalendars(): List<DeviceCalendarInfo> =
+    queryCalendarsWithStatus().calendars
 
   /** Returns IDs of visible calendars belonging to the phone's Google account. */
-  suspend fun findDefaultGoogleCalendarIds(): Set<Long> = withContext(Dispatchers.IO) {
-    queryCalendarsInternal()
+  suspend fun findDefaultGoogleCalendarIds(): Set<Long> =
+    queryCalendarsWithStatus().googleCalendarIds
+
+  /** Queries visible calendars along with Google-account IDs, permission status, and any error. */
+  internal suspend fun queryCalendarsWithStatus(): CalendarListResult = withContext(Dispatchers.IO) {
+    val projection = arrayOf(
+      CalendarContract.Calendars._ID,
+      CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+      CalendarContract.Calendars.ACCOUNT_NAME,
+      CalendarContract.Calendars.CALENDAR_COLOR,
+      CalendarContract.Calendars.ACCOUNT_TYPE,
+    )
+    val selection = "${CalendarContract.Calendars.VISIBLE} = 1"
+    val sortOrder =
+      "${CalendarContract.Calendars.ACCOUNT_NAME} ASC, ${CalendarContract.Calendars.CALENDAR_DISPLAY_NAME} ASC"
+
+    val rows = mutableListOf<CalendarRow>()
+    try {
+      appContext.contentResolver.query(
+        CalendarContract.Calendars.CONTENT_URI,
+        projection,
+        selection,
+        null,
+        sortOrder,
+      )?.use { cursor ->
+        val idxId = cursor.getColumnIndex(CalendarContract.Calendars._ID)
+        val idxName = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
+        val idxAccount = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_NAME)
+        val idxColor = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_COLOR)
+        val idxType = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_TYPE)
+
+        while (cursor.moveToNext()) {
+          val id = if (idxId >= 0) cursor.getLong(idxId) else continue
+          val name = (if (idxName >= 0) cursor.getString(idxName) else null).orEmpty()
+            .ifBlank { "Calendar" }
+          val account = (if (idxAccount >= 0) cursor.getString(idxAccount) else null).orEmpty()
+          val color = if (idxColor >= 0) cursor.getInt(idxColor) else DEFAULT_CALENDAR_COLOR
+          val accountType = (if (idxType >= 0) cursor.getString(idxType) else null).orEmpty()
+
+          rows.add(
+            CalendarRow(
+              info = DeviceCalendarInfo(
+                id = id,
+                displayName = name,
+                accountName = account,
+                colorArgb = color,
+              ),
+              accountType = accountType,
+            ),
+          )
+        }
+      }
+    } catch (_: SecurityException) {
+      return@withContext CalendarListResult(permissionDenied = true)
+    } catch (e: Exception) {
+      CrashCatcher.logNonFatal(appContext, "StandBy calendar list query failed", e)
+      return@withContext CalendarListResult(
+        errorMessage = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName,
+      )
+    }
+
+    val googleIds = rows
       .filter { row ->
         row.accountType.equals(GOOGLE_ACCOUNT_TYPE, ignoreCase = true) ||
           row.info.accountName.endsWith("@gmail.com", ignoreCase = true) ||
@@ -35,6 +108,11 @@ internal class DeviceCalendarProvider(
       }
       .map { it.info.id }
       .toSet()
+
+    CalendarListResult(
+      calendars = rows.map { it.info },
+      googleCalendarIds = googleIds,
+    )
   }
 
   /** Queries upcoming non-cancelled, non-declined event instances within the configured window. */
@@ -42,23 +120,25 @@ internal class DeviceCalendarProvider(
     selectedCalendarIds: Set<Long>,
     limit: Int,
   ): List<CalendarEventSummary> =
-    queryUpcomingEvents(
+    queryUpcomingEventsWithStatus(
       selectedCalendarIds = selectedCalendarIds,
       limit = limit,
       window = windowProvider(),
       nowMs = System.currentTimeMillis(),
       timeZone = TimeZone.getDefault(),
-    )
+    ).events
 
-  /** Internal query with explicit window, clock, and timezone for deterministic testing. */
-  internal suspend fun queryUpcomingEvents(
+  /** Internal query returning upcoming events together with permission and error status. */
+  internal suspend fun queryUpcomingEventsWithStatus(
     selectedCalendarIds: Set<Long>,
     limit: Int,
-    window: StandByCalendarWindow,
-    nowMs: Long,
+    window: StandByCalendarWindow = windowProvider(),
+    nowMs: Long = System.currentTimeMillis(),
     timeZone: TimeZone = TimeZone.getDefault(),
-  ): List<CalendarEventSummary> = withContext(Dispatchers.IO) {
-    if (selectedCalendarIds.isEmpty() || limit <= 0) return@withContext emptyList()
+  ): UpcomingEventsResult = withContext(Dispatchers.IO) {
+    if (selectedCalendarIds.isEmpty() || limit <= 0) {
+      return@withContext UpcomingEventsResult()
+    }
 
     val (_, windowEndMs) = computeWindowBounds(nowMs, window, timeZone)
     val queryStartMs = startOfLocalDay(nowMs, timeZone) - ONE_DAY_MS
@@ -117,75 +197,24 @@ internal class DeviceCalendarProvider(
         }
       }
     } catch (_: SecurityException) {
-      return@withContext emptyList()
-    } catch (_: Exception) {
-      return@withContext emptyList()
+      return@withContext UpcomingEventsResult(permissionDenied = true)
+    } catch (e: Exception) {
+      CrashCatcher.logNonFatal(appContext, "StandBy upcoming events query failed", e)
+      return@withContext UpcomingEventsResult(
+        errorMessage = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName,
+      )
     }
 
-    filterAndSortEvents(
-      rows = rawRows,
-      selectedCalendarIds = selectedCalendarIds,
-      limit = limit,
-      window = window,
-      nowMs = nowMs,
-      timeZone = timeZone,
+    UpcomingEventsResult(
+      events = filterAndSortEvents(
+        rows = rawRows,
+        selectedCalendarIds = selectedCalendarIds,
+        limit = limit,
+        window = window,
+        nowMs = nowMs,
+        timeZone = timeZone,
+      ),
     )
-  }
-
-  private fun queryCalendarsInternal(): List<CalendarRow> {
-    val projection = arrayOf(
-      CalendarContract.Calendars._ID,
-      CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
-      CalendarContract.Calendars.ACCOUNT_NAME,
-      CalendarContract.Calendars.CALENDAR_COLOR,
-      CalendarContract.Calendars.ACCOUNT_TYPE,
-    )
-    val selection = "${CalendarContract.Calendars.VISIBLE} = 1"
-    val sortOrder =
-      "${CalendarContract.Calendars.ACCOUNT_NAME} ASC, ${CalendarContract.Calendars.CALENDAR_DISPLAY_NAME} ASC"
-
-    val result = mutableListOf<CalendarRow>()
-    try {
-      appContext.contentResolver.query(
-        CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        selection,
-        null,
-        sortOrder,
-      )?.use { cursor ->
-        val idxId = cursor.getColumnIndex(CalendarContract.Calendars._ID)
-        val idxName = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
-        val idxAccount = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_NAME)
-        val idxColor = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_COLOR)
-        val idxType = cursor.getColumnIndex(CalendarContract.Calendars.ACCOUNT_TYPE)
-
-        while (cursor.moveToNext()) {
-          val id = if (idxId >= 0) cursor.getLong(idxId) else continue
-          val name = (if (idxName >= 0) cursor.getString(idxName) else null).orEmpty()
-            .ifBlank { "Calendar" }
-          val account = (if (idxAccount >= 0) cursor.getString(idxAccount) else null).orEmpty()
-          val color = if (idxColor >= 0) cursor.getInt(idxColor) else DEFAULT_CALENDAR_COLOR
-          val accountType = (if (idxType >= 0) cursor.getString(idxType) else null).orEmpty()
-
-          result.add(
-            CalendarRow(
-              info = DeviceCalendarInfo(
-                id = id,
-                displayName = name,
-                accountName = account,
-                colorArgb = color,
-              ),
-              accountType = accountType,
-            ),
-          )
-        }
-      }
-    } catch (_: SecurityException) {
-      return emptyList()
-    } catch (_: Exception) {
-      return emptyList()
-    }
-    return result
   }
 
   private data class CalendarRow(

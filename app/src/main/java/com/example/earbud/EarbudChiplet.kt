@@ -276,6 +276,18 @@ object EarbudChiplet {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("diag_calendar_refresh"),
           )
+          Text(
+            text = "Stand By last started at: ${standByDiag.standByLastStartedLabel}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_standby_last_started"),
+          )
+          Text(
+            text = "Events shown on last Stand By: ${standByDiag.standByLastEventCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_standby_events_shown"),
+          )
         }
       }
 

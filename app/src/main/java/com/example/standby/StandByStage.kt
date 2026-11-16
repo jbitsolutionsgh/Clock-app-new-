@@ -68,13 +68,15 @@ private sealed interface StandByEventRow {
 
 /**
  * Shared Stand By stage rendered by both StandByDreamService and the in-app Preview.
- * Applies OLED black background, dimmed brightness, burn-in drift across both clock and events,
+ * Applies OLED black background, optional preview alpha dimming, burn-in drift across both clock and events,
  * and automatic refresh on start, every 5 minutes, and on calendar ContentObserver changes.
  */
 @Composable
 internal fun StandByStage(
   coordinator: StandByCalendarCoordinator,
   prefs: AuraPrefs,
+  applyDimAlpha: Boolean = true,
+  isDreamService: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -87,6 +89,22 @@ internal fun StandByStage(
   val window by prefs.standByCalendarWindow.collectAsStateWithLifecycle()
 
   val calSnapshot by coordinator.snapshot.collectAsStateWithLifecycle()
+
+  // Record when the real DreamService started Stand By for the Diagnostics screen.
+  LaunchedEffect(isDreamService) {
+    if (isDreamService) {
+      val startedLabel = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+      coordinator.recordDreamStarted(startedLabel)
+    }
+  }
+
+  // Record how many events are shown on the real Stand By DreamService.
+  LaunchedEffect(isDreamService, calendarEnabled, calSnapshot.permissionGranted, calSnapshot.events.size, calSnapshot.isLoading) {
+    if (isDreamService && !calSnapshot.isLoading) {
+      val shown = if (calendarEnabled && calSnapshot.permissionGranted) calSnapshot.events.size else 0
+      coordinator.recordDreamEventsShown(shown)
+    }
+  }
 
   // Initial load + 5-minute periodic refresh while Stand By is showing.
   LaunchedEffect(calendarEnabled, selectedIds, maxEvents, window) {
@@ -133,69 +151,146 @@ internal fun StandByStage(
   }
   val (dx, dy) = DRIFT_OFFSETS[driftStep]
 
-  val showCalendar = calendarEnabled && calSnapshot.permissionGranted && calSnapshot.events.isNotEmpty()
-  val rows = remember(calSnapshot.events, calSnapshot.calendars, showEventTitles) {
-    if (!showCalendar) emptyList()
+  val showEventList = calendarEnabled && calSnapshot.permissionGranted && calSnapshot.events.isNotEmpty()
+  val statusMessage: String? = if (!calendarEnabled || showEventList) {
+    null
+  } else {
+    when {
+      !calSnapshot.permissionGranted -> "Calendar access not allowed"
+      calSnapshot.errorMessage != null -> "Calendar error"
+      selectedIds.isEmpty() -> "No calendars selected"
+      else -> "No upcoming events"
+    }
+  }
+
+  val rows = remember(calSnapshot.events, calSnapshot.calendars, showEventTitles, showEventList) {
+    if (!showEventList) emptyList()
     else buildEventRows(context, calSnapshot.events, calSnapshot.calendars, showEventTitles)
   }
 
+  val stageModifier = modifier
+    .fillMaxSize()
+    .background(OledBlack)
+    .padding(horizontal = 20.dp, vertical = 16.dp)
+    .let { base ->
+      if (applyDimAlpha) base.alpha(dimLevel.coerceIn(0.15f, 1.0f)) else base
+    }
+    .offset { IntOffset(dx, dy) }
+    .testTag("standby_stage_root")
+
   BoxWithConstraints(
-    modifier = modifier
-      .fillMaxSize()
-      .background(OledBlack)
-      .padding(horizontal = 20.dp, vertical = 16.dp)
-      .alpha(dimLevel.coerceIn(0.15f, 1.0f))
-      .offset { IntOffset(dx, dy) }
-      .testTag("standby_stage_root"),
+    modifier = stageModifier,
     contentAlignment = Alignment.Center,
   ) {
-    if (!showCalendar) {
-      StandByClockPane(
-        useSelectedFace = useSelectedFace,
-        modifier = Modifier.fillMaxSize(),
-      )
-    } else if (maxWidth > maxHeight) {
-      // Landscape: ~60% clock on left, event list on right.
-      Row(
-        modifier = Modifier.fillMaxSize(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
-      ) {
+    val isLandscape = maxWidth > maxHeight
+    when {
+      !calendarEnabled -> {
         StandByClockPane(
           useSelectedFace = useSelectedFace,
-          modifier = Modifier
-            .weight(0.6f)
-            .fillMaxHeight(),
-        )
-        StandByEventListPane(
-          rows = rows,
-          modifier = Modifier
-            .weight(0.4f)
-            .fillMaxHeight(),
+          modifier = Modifier.fillMaxSize(),
         )
       }
-    } else {
-      // Portrait: clock on top, event list underneath.
-      Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-      ) {
-        StandByClockPane(
-          useSelectedFace = useSelectedFace,
-          modifier = Modifier
-            .weight(0.56f)
-            .fillMaxWidth(),
-        )
-        StandByEventListPane(
-          rows = rows,
-          modifier = Modifier
-            .weight(0.44f)
-            .fillMaxWidth(),
-        )
+      showEventList && isLandscape -> {
+        // Landscape: ~60% clock on left, event list on right.
+        Row(
+          modifier = Modifier.fillMaxSize(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+          StandByClockPane(
+            useSelectedFace = useSelectedFace,
+            modifier = Modifier
+              .weight(0.6f)
+              .fillMaxHeight(),
+          )
+          StandByEventListPane(
+            rows = rows,
+            modifier = Modifier
+              .weight(0.4f)
+              .fillMaxHeight(),
+          )
+        }
+      }
+      showEventList -> {
+        // Portrait: clock on top, event list underneath.
+        Column(
+          modifier = Modifier.fillMaxSize(),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+          StandByClockPane(
+            useSelectedFace = useSelectedFace,
+            modifier = Modifier
+              .weight(0.54f)
+              .fillMaxWidth(),
+          )
+          StandByEventListPane(
+            rows = rows,
+            modifier = Modifier
+              .weight(0.46f)
+              .fillMaxWidth(),
+          )
+        }
+      }
+      isLandscape -> {
+        // Landscape with calendar enabled and no events: keep clock prominent beside one dim status line.
+        Row(
+          modifier = Modifier.fillMaxSize(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+          StandByClockPane(
+            useSelectedFace = useSelectedFace,
+            modifier = Modifier
+              .weight(0.62f)
+              .fillMaxHeight(),
+          )
+          Box(
+            modifier = Modifier
+              .weight(0.38f)
+              .fillMaxHeight(),
+            contentAlignment = Alignment.Center,
+          ) {
+            StandByCalendarStatusLine(text = statusMessage.orEmpty())
+          }
+        }
+      }
+      else -> {
+        // Portrait with calendar enabled and no events: one calm dim line directly below the clock.
+        Column(
+          modifier = Modifier.fillMaxSize(),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          StandByClockPane(
+            useSelectedFace = useSelectedFace,
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxWidth(),
+          )
+          StandByCalendarStatusLine(
+            text = statusMessage.orEmpty(),
+            modifier = Modifier.padding(bottom = 12.dp),
+          )
+        }
       }
     }
   }
+}
+
+@Composable
+private fun StandByCalendarStatusLine(
+  text: String,
+  modifier: Modifier = Modifier,
+) {
+  Text(
+    text = text,
+    fontFamily = SpaceGroteskFamily,
+    fontWeight = FontWeight.Medium,
+    fontSize = 15.sp,
+    color = Color(0xFF94A3B8).copy(alpha = 0.78f),
+    modifier = modifier.testTag("standby_calendar_status_line"),
+  )
 }
 
 @Composable
@@ -232,7 +327,7 @@ private fun StandByEventListPane(
     modifier = modifier
       .padding(horizontal = 8.dp)
       .testTag("standby_event_list"),
-    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
   ) {
     rows.forEach { row ->
       when (row) {
@@ -241,7 +336,7 @@ private fun StandByEventListPane(
             text = row.label,
             fontFamily = SpaceGroteskFamily,
             fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
+            fontSize = 15.sp,
             letterSpacing = 1.sp,
             color = Color(0xFF94A3B8),
             modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
@@ -254,7 +349,7 @@ private fun StandByEventListPane(
           ) {
             Box(
               modifier = Modifier
-                .size(10.dp)
+                .size(11.dp)
                 .clip(CircleShape)
                 .background(Color(row.colorArgb)),
             )
@@ -263,7 +358,7 @@ private fun StandByEventListPane(
               text = row.timeLabel,
               fontFamily = JetBrainsMonoFamily,
               fontWeight = FontWeight.Bold,
-              fontSize = 15.sp,
+              fontSize = 18.sp,
               color = MaterialTheme.colorScheme.primary,
             )
             Spacer(modifier = Modifier.width(10.dp))
@@ -271,8 +366,8 @@ private fun StandByEventListPane(
               text = row.title,
               fontFamily = SpaceGroteskFamily,
               fontWeight = FontWeight.Medium,
-              fontSize = 17.sp,
-              color = Color.White.copy(alpha = 0.92f),
+              fontSize = 20.sp,
+              color = Color.White.copy(alpha = 0.94f),
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.weight(1f),

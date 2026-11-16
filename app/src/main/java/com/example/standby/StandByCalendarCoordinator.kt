@@ -24,12 +24,13 @@ internal data class StandByCalendarSnapshot(
   val permissionGranted: Boolean = false,
   val calendars: List<DeviceCalendarInfo> = emptyList(),
   val events: List<CalendarEventSummary> = emptyList(),
+  val errorMessage: String? = null,
   val isLoading: Boolean = false,
 )
 
 /**
- * Coordinates on-device calendar loading, first-time Google calendar auto-selection,
- * and diagnostics reporting for both Stand By screens and Settings/Diagnostics.
+ * Coordinates on-device calendar loading, first-time Google/visible calendar auto-selection,
+ * error reporting, and diagnostics for both Stand By screens and Settings/Diagnostics.
  */
 internal class StandByCalendarCoordinator(
   context: Context,
@@ -63,52 +64,101 @@ internal class StandByCalendarCoordinator(
     scope.launch { refreshSuspend() }
   }
 
-  /** Refreshes calendars, default Google selection if needed, and upcoming Stand By events. */
+  /** Records the timestamp when StandByDreamService started showing. */
+  override fun recordDreamStarted(startedTimeLabel: String) {
+    _diagnostics.value = _diagnostics.value.copy(standByLastStartedLabel = startedTimeLabel)
+  }
+
+  /** Records the number of calendar events rendered on the StandByDreamService screen. */
+  override fun recordDreamEventsShown(count: Int) {
+    _diagnostics.value = _diagnostics.value.copy(standByLastEventCount = count)
+  }
+
+  /** Refreshes calendars, default Google/visible selection if needed, and upcoming Stand By events. */
   suspend fun refreshSuspend() {
     refreshMutex.withLock {
       val granted = hasCalendarPermission()
       if (!granted) {
         _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
-        _diagnostics.value = StandByDiagnostics(
+        _diagnostics.value = _diagnostics.value.copy(
           calendarPermissionGranted = false,
           calendarsFoundCount = 0,
           eventsFoundCount = 0,
-          lastRefreshTimeLabel = _diagnostics.value.lastRefreshTimeLabel,
         )
         return
       }
 
       _snapshot.value = _snapshot.value.copy(permissionGranted = true, isLoading = true)
-      val calendars = provider.listAvailableCalendars()
+      val calResult = provider.queryCalendarsWithStatus()
+      if (calResult.permissionDenied) {
+        _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
+        _diagnostics.value = _diagnostics.value.copy(
+          calendarPermissionGranted = false,
+          calendarsFoundCount = 0,
+          eventsFoundCount = 0,
+        )
+        return
+      }
 
-      if (calendars.isNotEmpty() && !prefs.hasInitializedCalendarSelection()) {
-        val defaultGoogleIds = provider.findDefaultGoogleCalendarIds()
-        prefs.setSelectedCalendarIds(defaultGoogleIds)
+      val calendars = calResult.calendars
+      val selectedNow = prefs.selectedCalendarIds.value
+      val shouldSelectDefaults = calendars.isNotEmpty() && (
+        !prefs.hasInitializedCalendarSelection() ||
+          (selectedNow.isEmpty() && !prefs.hasUserEditedCalendarSelection())
+        )
+      if (shouldSelectDefaults) {
+        val defaults = resolveDefaultCalendarSelection(calendars, calResult.googleCalendarIds)
+        if (defaults.isNotEmpty()) {
+          prefs.setSelectedCalendarIds(defaults, userEdited = false)
+        }
       }
 
       val selectedIds = prefs.selectedCalendarIds.value
-      val events = if (prefs.standByCalendarEnabled.value && selectedIds.isNotEmpty()) {
-        provider.getUpcomingEvents(
+      val eventsResult = if (prefs.standByCalendarEnabled.value && selectedIds.isNotEmpty()) {
+        provider.queryUpcomingEventsWithStatus(
           selectedCalendarIds = selectedIds,
           limit = prefs.standByMaxEvents.value,
         )
       } else {
-        emptyList()
+        null
       }
 
+      if (eventsResult?.permissionDenied == true) {
+        _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
+        _diagnostics.value = _diagnostics.value.copy(
+          calendarPermissionGranted = false,
+          calendarsFoundCount = calendars.size,
+          eventsFoundCount = 0,
+        )
+        return
+      }
+
+      val events = eventsResult?.events ?: emptyList()
+      val errorMessage = calResult.errorMessage ?: eventsResult?.errorMessage
       val timeLabel = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
       _snapshot.value = StandByCalendarSnapshot(
         permissionGranted = true,
         calendars = calendars,
         events = events,
+        errorMessage = errorMessage,
         isLoading = false,
       )
-      _diagnostics.value = StandByDiagnostics(
+      _diagnostics.value = _diagnostics.value.copy(
         calendarPermissionGranted = true,
         calendarsFoundCount = calendars.size,
         eventsFoundCount = events.size,
         lastRefreshTimeLabel = timeLabel,
       )
     }
+  }
+
+  companion object {
+    /** Selects Google-account calendars when present, otherwise selects all visible calendars. */
+    internal fun resolveDefaultCalendarSelection(
+      calendars: List<DeviceCalendarInfo>,
+      googleCalendarIds: Set<Long>,
+    ): Set<Long> =
+      googleCalendarIds.ifEmpty { calendars.map { it.id }.toSet() }
   }
 }

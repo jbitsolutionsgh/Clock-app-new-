@@ -81,4 +81,10 @@ internal interface WatchFace {
     smoothSeconds: Boolean,
     modifier: Modifier,
   )
+
+  /** Lightweight thumbnail preview used by the face picker; defaults to a minimal placeholder. */
+  @Composable
+  fun Thumbnail(modifier: Modifier) {
+    // Subclasses with dial resources override this to show a cached <=160px downsampled preview.
+  }
 }

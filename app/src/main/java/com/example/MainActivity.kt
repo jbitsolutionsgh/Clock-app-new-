@@ -1,5 +1,8 @@
 package com.example
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -30,6 +33,8 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,7 +46,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.CoreSingletons
 import com.example.earbud.EarbudChiplet
@@ -93,10 +105,45 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AuraClockRoot() {
+  val context = LocalContext.current
+  val view = LocalView.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val prefs = remember { CoreSingletons.prefs(context) }
+
   var currentTab by rememberSaveable { mutableStateOf(AppTab.TIMER) }
   var showStandByPreview by rememberSaveable { mutableStateOf(false) }
+  var isTimerFullScreen by rememberSaveable { mutableStateOf(prefs.timerFullScreenByDefault.value) }
+
   val configuration = LocalConfiguration.current
   val useRail = configuration.screenWidthDp > configuration.screenHeightDp && configuration.screenWidthDp >= 600
+  val immersiveTimer = !showStandByPreview && currentTab == AppTab.TIMER && isTimerFullScreen
+
+  // Sync Android system bars with full-screen state and always restore on leave or ON_STOP.
+  LaunchedEffect(immersiveTimer, view) {
+    setSystemBarsVisible(context.findActivity(), view, visible = !immersiveTimer)
+  }
+
+  DisposableEffect(immersiveTimer, lifecycleOwner, view) {
+    val observer = LifecycleEventObserver { _, event ->
+      val activity = context.findActivity()
+      when (event) {
+        Lifecycle.Event.ON_STOP -> setSystemBarsVisible(activity, view, visible = true)
+        Lifecycle.Event.ON_START,
+        Lifecycle.Event.ON_RESUME -> setSystemBarsVisible(activity, view, visible = !immersiveTimer)
+        else -> Unit
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      setSystemBarsVisible(context.findActivity(), view, visible = true)
+    }
+  }
+
+  val selectTab: (AppTab) -> Unit = { tab ->
+    currentTab = tab
+    isTimerFullScreen = tab == AppTab.TIMER && prefs.timerFullScreenByDefault.value
+  }
 
   if (showStandByPreview) {
     StandByChiplet.PreviewScreen(
@@ -108,9 +155,9 @@ private fun AuraClockRoot() {
 
   Scaffold(
     containerColor = OledBlack,
-    contentWindowInsets = WindowInsets.safeDrawing,
+    contentWindowInsets = if (immersiveTimer) WindowInsets(0) else WindowInsets.safeDrawing,
     bottomBar = {
-      if (!useRail) {
+      if (!useRail && !immersiveTimer) {
         NavigationBar(
           containerColor = Color(0xFF07090D),
           contentColor = MaterialTheme.colorScheme.onSurface,
@@ -119,7 +166,7 @@ private fun AuraClockRoot() {
             val selected = currentTab == tab
             NavigationBarItem(
               selected = selected,
-              onClick = { currentTab = tab },
+              onClick = { selectTab(tab) },
               icon = {
                 Icon(
                   imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
@@ -140,7 +187,7 @@ private fun AuraClockRoot() {
         .background(OledBlack)
         .padding(innerPadding),
     ) {
-      if (useRail) {
+      if (useRail && !immersiveTimer) {
         NavigationRail(
           containerColor = Color(0xFF07090D),
           contentColor = MaterialTheme.colorScheme.onSurface,
@@ -149,7 +196,7 @@ private fun AuraClockRoot() {
             val selected = currentTab == tab
             NavigationRailItem(
               selected = selected,
-              onClick = { currentTab = tab },
+              onClick = { selectTab(tab) },
               icon = {
                 Icon(
                   imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
@@ -165,7 +212,10 @@ private fun AuraClockRoot() {
 
       Box(modifier = Modifier.weight(1f).fillMaxSize()) {
         when (currentTab) {
-          AppTab.TIMER -> TimerChiplet.Screen()
+          AppTab.TIMER -> TimerChiplet.Screen(
+            isFullScreen = isTimerFullScreen,
+            onFullScreenChange = { isTimerFullScreen = it },
+          )
           AppTab.CLOCK -> FacesChiplet.Screen()
           AppTab.STOPWATCH -> StopwatchChiplet.Screen()
           AppTab.SETTINGS -> SettingsScreen(onPreviewStandBy = { showStandByPreview = true })
@@ -173,6 +223,28 @@ private fun AuraClockRoot() {
       }
     }
   }
+}
+
+private fun setSystemBarsVisible(
+  activity: Activity?,
+  view: android.view.View,
+  visible: Boolean,
+) {
+  val window = activity?.window ?: return
+  val controller = WindowCompat.getInsetsController(window, view)
+  if (visible) {
+    controller.show(WindowInsetsCompat.Type.systemBars())
+  } else {
+    controller.systemBarsBehavior =
+      WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    controller.hide(WindowInsetsCompat.Type.systemBars())
+  }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
 }
 
 @Composable

@@ -31,6 +31,22 @@ object CrashCatcher {
     }
   }
 
+  /** Records a non-fatal caught error (such as a calendar query failure) to the offline log file. */
+  fun logNonFatal(context: Context, title: String, throwable: Throwable) {
+    runCatching {
+      val sw = StringWriter()
+      val pw = PrintWriter(sw)
+      val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+      pw.println("AuraClock Error Log: $title")
+      pw.println("Time: $stamp")
+      pw.println("Device: ${Build.MANUFACTURER} ${Build.MODEL} (SDK ${Build.VERSION.SDK_INT})")
+      pw.println("---")
+      throwable.printStackTrace(pw)
+      pw.flush()
+      getCrashFile(context).writeText(sw.toString())
+    }
+  }
+
   /** Writes the stack trace and device header to internal files storage. */
   private fun writeCrashLog(context: Context, thread: Thread, throwable: Throwable) {
     runCatching {

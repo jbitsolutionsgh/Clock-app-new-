@@ -6,10 +6,15 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.core.AuraPrefs
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
+import com.example.core.CrashCatcher
 import com.example.core.StandByCalendarWindow
 import com.example.earbud.MediaKeyRouter
+import com.example.faces.DialThumbnailCache
 import com.example.faces.FacesChiplet
+import com.example.faces.WatchFaceRegistry
+import com.example.standby.DeviceCalendarInfo
 import com.example.standby.DeviceCalendarProvider
+import com.example.standby.StandByCalendarCoordinator
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,16 +95,49 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `face navigator cycles through registered faces`() {
+  fun `face navigator cycles through all eleven registered faces in exact order`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val prefs = CoreSingletons.prefs(context)
     val nav = FacesChiplet.ensureInitialized(context)
     val options = nav.getFaceOptions()
-    assertEquals(4, options.size)
+    assertEquals(11, options.size)
+    assertEquals("motorsport_m", options.first().first)
+    assertEquals("speedmaster_racing", options[1].first)
+    assertEquals("face_nike_dots", options[2].first)
+    assertEquals("face_wood_art", options.last().first)
+    assertEquals("Workshop Wood", options.last().second)
+
+    // StandBy digital face remains resolvable even though it is not in the 11-face picker list.
+    assertEquals("standby_digital", WatchFaceRegistry.findById("standby_digital").id)
 
     prefs.setSelectedFaceId(options.first().first)
     nav.nextFace()
     assertEquals(options[1].first, prefs.selectedFaceId.value)
+  }
+
+  @Test
+  fun `dial thumbnails decode at 160px or smaller for all eleven nodpi drawables`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val resIds = listOf(
+      R.drawable.face_motorsport_m,
+      R.drawable.face_speedmaster_racing,
+      R.drawable.face_nike_dots,
+      R.drawable.face_nike_numerals,
+      R.drawable.face_yellow_racing,
+      R.drawable.face_lacoste_green,
+      R.drawable.face_casio_leather,
+      R.drawable.face_bell_ross,
+      R.drawable.face_seiko_blue,
+      R.drawable.face_phantom_black,
+      R.drawable.face_wood_art,
+    )
+    resIds.forEach { resId ->
+      val bmp = DialThumbnailCache.decodeDownsampled(context.resources, resId, 160)
+      assertTrue("Thumbnail decoded null for $resId", bmp != null)
+      assertTrue("Width exceeded 160px: ${bmp!!.width}", bmp.width <= 160)
+      assertTrue("Height exceeded 160px: ${bmp.height}", bmp.height <= 160)
+      bmp.recycle()
+    }
   }
 
   @Test
@@ -182,5 +220,68 @@ class ExampleRobolectricTest {
     val events = provider.getUpcomingEvents(setOf(1L), 4)
     assertTrue(calendars.isEmpty())
     assertTrue(events.isEmpty())
+  }
+
+  @Test
+  fun `default calendar selection falls back to all visible calendars when no google calendars`() {
+    val visible = listOf(
+      DeviceCalendarInfo(11L, "Local Work", "local@device", 0xFF3B82F6.toInt()),
+      DeviceCalendarInfo(22L, "School Timetable", "caldav@school.edu", 0xFF10B981.toInt()),
+    )
+    val selectedNoGoogle = StandByCalendarCoordinator.resolveDefaultCalendarSelection(
+      calendars = visible,
+      googleCalendarIds = emptySet(),
+    )
+    assertEquals(setOf(11L, 22L), selectedNoGoogle)
+
+    val selectedWithGoogle = StandByCalendarCoordinator.resolveDefaultCalendarSelection(
+      calendars = visible,
+      googleCalendarIds = setOf(22L),
+    )
+    assertEquals(setOf(22L), selectedWithGoogle)
+  }
+
+  @Test
+  fun `empty calendar selection is never saved as initialized`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    prefs.setSelectedCalendarIds(emptySet())
+    assertFalse(prefs.hasInitializedCalendarSelection())
+
+    prefs.setSelectedCalendarIds(setOf(7L))
+    assertTrue(prefs.hasInitializedCalendarSelection())
+  }
+
+  @Test
+  fun `standby coordinator records dream metrics and crash catcher records non fatal error`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    val coordinator = StandByCalendarCoordinator(context, prefs)
+
+    coordinator.recordDreamStarted("21:15:00")
+    coordinator.recordDreamEventsShown(3)
+    coordinator.refreshSuspend()
+
+    assertEquals("21:15:00", coordinator.diagnostics.value.standByLastStartedLabel)
+    assertEquals(3, coordinator.diagnostics.value.standByLastEventCount)
+
+    CrashCatcher.logNonFatal(context, "Test Calendar Error", IllegalStateException("Provider unavailable"))
+    assertTrue(CrashCatcher.hasCrashLog(context))
+    assertTrue(CrashCatcher.readLastCrashLog(context).orEmpty().contains("Provider unavailable"))
+  }
+
+  @Test
+  fun `fullscreen timer preferences default false and persist`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    assertFalse(prefs.timerFullScreenByDefault.value)
+    assertFalse(prefs.timerGoFullScreenOnStart.value)
+
+    prefs.setTimerFullScreenByDefault(true)
+    prefs.setTimerGoFullScreenOnStart(true)
+
+    val reloaded = AuraPrefs(context)
+    assertTrue(reloaded.timerFullScreenByDefault.value)
+    assertTrue(reloaded.timerGoFullScreenOnStart.value)
   }
 }

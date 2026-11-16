@@ -89,6 +89,12 @@ class AuraPrefs(context: Context) {
   private val _standByShowEventTitles = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_SHOW_TITLES, true))
   val standByShowEventTitles: StateFlow<Boolean> = _standByShowEventTitles.asStateFlow()
 
+  private val _timerFullScreenByDefault = MutableStateFlow(prefs.getBoolean(KEY_TIMER_FULLSCREEN_DEFAULT, false))
+  val timerFullScreenByDefault: StateFlow<Boolean> = _timerFullScreenByDefault.asStateFlow()
+
+  private val _timerGoFullScreenOnStart = MutableStateFlow(prefs.getBoolean(KEY_TIMER_FULLSCREEN_ON_START, false))
+  val timerGoFullScreenOnStart: StateFlow<Boolean> = _timerGoFullScreenOnStart.asStateFlow()
+
   private fun loadThemeColor(): AuraThemeColor =
     AuraThemeColor.fromId(prefs.getString(KEY_THEME_COLOR, AuraThemeColor.COBALT.id))
 
@@ -224,9 +230,13 @@ class AuraPrefs(context: Context) {
       ?.toSet()
       ?: emptySet()
 
-  /** Returns true once default Google calendar selection has been initialized. */
+  /** Returns true once a non-empty calendar selection has been initialized. */
   fun hasInitializedCalendarSelection(): Boolean =
     prefs.getBoolean(KEY_STANDBY_CAL_INITIALIZED, false)
+
+  /** Returns true if the user manually edited calendar checkboxes in Settings. */
+  fun hasUserEditedCalendarSelection(): Boolean =
+    prefs.getBoolean(KEY_STANDBY_CAL_USER_EDITED, false)
 
   /** Enables or disables the Stand By calendar event list. */
   fun setStandByCalendarEnabled(enabled: Boolean) {
@@ -234,12 +244,18 @@ class AuraPrefs(context: Context) {
     _standByCalendarEnabled.value = enabled
   }
 
-  /** Persists the set of selected device calendar IDs and marks initialization complete. */
-  fun setSelectedCalendarIds(ids: Set<Long>) {
-    prefs.edit()
+  /**
+   * Persists the set of selected device calendar IDs.
+   * Never marks an empty selection as initialized so default selection re-runs when calendars exist.
+   */
+  fun setSelectedCalendarIds(ids: Set<Long>, userEdited: Boolean = false) {
+    val editor = prefs.edit()
       .putStringSet(KEY_STANDBY_CAL_IDS, ids.map { it.toString() }.toSet())
-      .putBoolean(KEY_STANDBY_CAL_INITIALIZED, true)
-      .apply()
+      .putBoolean(KEY_STANDBY_CAL_INITIALIZED, ids.isNotEmpty())
+    if (userEdited) {
+      editor.putBoolean(KEY_STANDBY_CAL_USER_EDITED, true)
+    }
+    editor.apply()
     _selectedCalendarIds.value = ids
   }
 
@@ -260,6 +276,18 @@ class AuraPrefs(context: Context) {
   fun setStandByShowEventTitles(show: Boolean) {
     prefs.edit().putBoolean(KEY_STANDBY_SHOW_TITLES, show).apply()
     _standByShowEventTitles.value = show
+  }
+
+  /** Sets whether the Timer tab opens in full-screen mode by default. */
+  fun setTimerFullScreenByDefault(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_TIMER_FULLSCREEN_DEFAULT, enabled).apply()
+    _timerFullScreenByDefault.value = enabled
+  }
+
+  /** Sets whether starting the timer automatically switches to full-screen mode. */
+  fun setTimerGoFullScreenOnStart(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_TIMER_FULLSCREEN_ON_START, enabled).apply()
+    _timerGoFullScreenOnStart.value = enabled
   }
 
   /** Saves widget configuration for a specific appWidgetId. */
@@ -318,8 +346,11 @@ class AuraPrefs(context: Context) {
     private const val KEY_STANDBY_CAL_ENABLED = "standby_cal_enabled"
     private const val KEY_STANDBY_CAL_IDS = "standby_cal_ids"
     private const val KEY_STANDBY_CAL_INITIALIZED = "standby_cal_initialized"
+    private const val KEY_STANDBY_CAL_USER_EDITED = "standby_cal_user_edited"
     private const val KEY_STANDBY_MAX_EVENTS = "standby_max_events"
     private const val KEY_STANDBY_CAL_WINDOW = "standby_cal_window"
     private const val KEY_STANDBY_SHOW_TITLES = "standby_show_titles"
+    private const val KEY_TIMER_FULLSCREEN_DEFAULT = "timer_fullscreen_default"
+    private const val KEY_TIMER_FULLSCREEN_ON_START = "timer_fullscreen_on_start"
   }
 }

@@ -8,11 +8,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -143,7 +147,8 @@ object FacesChiplet {
             modifier = Modifier
               .fillMaxWidth()
               .padding(top = 8.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            contentPadding = PaddingValues(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
             items(WatchFaceRegistry.faces, key = { it.id }) { face ->
               FaceChip(
@@ -232,7 +237,7 @@ private fun FaceChip(
   selected: Boolean,
   onClick: () -> Unit,
 ) {
-  Box(
+  Row(
     modifier = Modifier
       .clip(RoundedCornerShape(14.dp))
       .background(
@@ -245,9 +250,12 @@ private fun FaceChip(
         shape = RoundedCornerShape(14.dp),
       )
       .clickable(onClick = onClick)
-      .padding(horizontal = 16.dp, vertical = 12.dp)
+      .padding(horizontal = 12.dp, vertical = 8.dp)
       .testTag("face_chip_${face.id}"),
+    verticalAlignment = Alignment.CenterVertically,
   ) {
+    face.Thumbnail(modifier = Modifier.size(44.dp))
+    Spacer(modifier = Modifier.width(10.dp))
     Text(
       text = face.displayName,
       style = MaterialTheme.typography.labelLarge,

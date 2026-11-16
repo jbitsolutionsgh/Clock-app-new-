@@ -4,14 +4,19 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -33,6 +39,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -50,7 +58,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +87,7 @@ import com.example.core.TimerController
 import com.example.core.TimerPhase
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
+import kotlinx.coroutines.delay
 
 /**
  * Public entry point for the timer chiplet.
@@ -98,13 +109,23 @@ object TimerChiplet {
     engine.playTestBeep()
   }
 
-  /** Renders the full-screen classroom countdown timer UI. */
+  /** Renders the classroom countdown timer UI, supporting both normal and immersive full-screen modes. */
   @Composable
-  fun Screen(modifier: Modifier = Modifier) {
+  fun Screen(
+    isFullScreen: Boolean = false,
+    onFullScreenChange: (Boolean) -> Unit = {},
+    modifier: Modifier = Modifier,
+  ) {
     val context = LocalContext.current
     val controller = remember { ensureInitialized(context) }
     val prefs = remember { CoreSingletons.prefs(context) }
-    TimerScreenContent(controller = controller, prefs = prefs, modifier = modifier)
+    TimerScreenContent(
+      controller = controller,
+      prefs = prefs,
+      isFullScreen = isFullScreen,
+      onFullScreenChange = onFullScreenChange,
+      modifier = modifier,
+    )
   }
 }
 
@@ -112,12 +133,14 @@ object TimerChiplet {
 private fun TimerScreenContent(
   controller: TimerController,
   prefs: AuraPrefs,
+  isFullScreen: Boolean,
+  onFullScreenChange: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val view = LocalView.current
   val context = LocalContext.current
 
-  // Keep the screen awake while the teacher has the timer tab open.
+  // Keep the screen awake while the teacher has the timer tab open (normal and full-screen).
   DisposableEffect(view) {
     val previous = view.keepScreenOn
     view.keepScreenOn = true
@@ -135,6 +158,7 @@ private fun TimerScreenContent(
   val roundGapSeconds by prefs.roundGapSeconds.collectAsStateWithLifecycle()
   val turnIndicatorEnabled by prefs.turnIndicatorEnabled.collectAsStateWithLifecycle()
   val turnGroupSize by prefs.turnGroupSize.collectAsStateWithLifecycle()
+  val goFullScreenOnStart by prefs.timerGoFullScreenOnStart.collectAsStateWithLifecycle()
 
   var showKeypad by remember { mutableStateOf(false) }
   var editingPresetIndex by remember { mutableStateOf<Int?>(null) }
@@ -149,7 +173,26 @@ private fun TimerScreenContent(
         notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
       }
     }
+    val currentPhase = controller.state.value.phase
+    val startingFromStopped = currentPhase != TimerPhase.RUNNING && currentPhase != TimerPhase.GAP_WAIT
     controller.startOrPause()
+    if (goFullScreenOnStart && startingFromStopped) {
+      onFullScreenChange(true)
+    }
+  }
+
+  if (isFullScreen) {
+    FullScreenTimerView(
+      controller = controller,
+      roundsMode = roundsMode,
+      turnIndicatorEnabled = turnIndicatorEnabled,
+      turnGroupSize = turnGroupSize,
+      onToggleRounds = { prefs.setRoundsMode(it) },
+      onStartPauseClick = requestNotifAndStart,
+      onExitFullScreen = { onFullScreenChange(false) },
+      modifier = modifier,
+    )
+    return
   }
 
   BoxWithConstraints(
@@ -223,7 +266,7 @@ private fun TimerScreenContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
       ) {
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         TimerDialSection(
           controller = controller,
           roundsMode = roundsMode,
@@ -257,6 +300,23 @@ private fun TimerScreenContent(
         )
       }
     }
+
+    // Expand button to immediately enter full-screen classroom mode.
+    IconButton(
+      onClick = { onFullScreenChange(true) },
+      modifier = Modifier
+        .align(Alignment.TopEnd)
+        .size(48.dp)
+        .clip(CircleShape)
+        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
+        .testTag("timer_fullscreen_button"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Fullscreen,
+        contentDescription = "Enter full-screen timer",
+        tint = Color.White,
+      )
+    }
   }
 
   if (showKeypad) {
@@ -283,6 +343,301 @@ private fun TimerScreenContent(
         controller.setDurationSeconds(seconds)
       },
     )
+  }
+}
+
+/**
+ * Full-screen classroom timer view filling the screen in both portrait and landscape.
+ * Auto-hides controls after 3 seconds and reveals them on tap while keeping round/speaker badges visible.
+ */
+@Composable
+private fun FullScreenTimerView(
+  controller: TimerController,
+  roundsMode: Boolean,
+  turnIndicatorEnabled: Boolean,
+  turnGroupSize: Int,
+  onToggleRounds: (Boolean) -> Unit,
+  onStartPauseClick: () -> Unit,
+  onExitFullScreen: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  BackHandler(onBack = onExitFullScreen)
+
+  val snap by controller.state.collectAsStateWithLifecycle()
+  val isRunning = snap.phase == TimerPhase.RUNNING || snap.phase == TimerPhase.GAP_WAIT
+
+  var controlsVisible by remember { mutableStateOf(true) }
+  var interactionNonce by remember { mutableIntStateOf(0) }
+
+  // Automatically hide controls 3 seconds after entering full-screen or last user interaction.
+  LaunchedEffect(controlsVisible, interactionNonce) {
+    if (controlsVisible) {
+      delay(3_000L)
+      controlsVisible = false
+    }
+  }
+
+  val touchInteraction: () -> Unit = {
+    if (snap.isRinging) {
+      controller.silenceBeep()
+    }
+    controlsVisible = true
+    interactionNonce++
+  }
+
+  BoxWithConstraints(
+    modifier = modifier
+      .fillMaxSize()
+      .background(OledBlack)
+      .safeDrawingPadding()
+      .clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = touchInteraction,
+      )
+      .testTag("timer_fullscreen_root"),
+    contentAlignment = Alignment.Center,
+  ) {
+    val ringDiameter = (minOf(maxWidth, maxHeight) * 0.88f).coerceAtLeast(240.dp)
+    val accentColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val alertColor = MaterialTheme.colorScheme.error
+
+    val progress = if (snap.totalDurationMs > 0L) {
+      (snap.remainingMs.toFloat() / snap.totalDurationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+      0f
+    }
+
+    val totalSec = when (snap.phase) {
+      TimerPhase.IDLE -> snap.totalDurationMs / 1000L
+      TimerPhase.GAP_WAIT -> (snap.gapRemainingMs + 999L) / 1000L
+      else -> ((snap.remainingMs + 999L) / 1000L).coerceAtLeast(0L)
+    }
+    val mins = totalSec / 60L
+    val secs = totalSec % 60L
+    val displayText = if (snap.phase == TimerPhase.GAP_WAIT) {
+      "GAP ${totalSec}s"
+    } else {
+      "%02d:%02d".format(mins, secs)
+    }
+
+    val digitFontSize = (ringDiameter.value * 0.27f).coerceIn(58f, 200f).sp
+    val ringColor = when {
+      snap.isRinging || snap.phase == TimerPhase.FINISHED -> alertColor
+      snap.phase == TimerPhase.GAP_WAIT -> accentColor.copy(alpha = 0.55f)
+      else -> accentColor
+    }
+
+    // Center progress ring and giant classroom countdown digits.
+    Box(
+      modifier = Modifier.size(ringDiameter),
+      contentAlignment = Alignment.Center,
+    ) {
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val strokePx = 18.dp.toPx()
+        val inset = strokePx / 2f
+        val arcSize = Size(size.width - strokePx, size.height - strokePx)
+        val topLeft = Offset(inset, inset)
+
+        drawArc(
+          color = trackColor,
+          startAngle = -90f,
+          sweepAngle = 360f,
+          useCenter = false,
+          topLeft = topLeft,
+          size = arcSize,
+          style = Stroke(width = strokePx, cap = StrokeCap.Round),
+        )
+        drawArc(
+          color = ringColor,
+          startAngle = -90f,
+          sweepAngle = 360f * progress,
+          useCenter = false,
+          topLeft = topLeft,
+          size = arcSize,
+          style = Stroke(width = strokePx, cap = StrokeCap.Round),
+        )
+      }
+
+      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+          text = displayText,
+          fontFamily = JetBrainsMonoFamily,
+          fontWeight = FontWeight.Bold,
+          fontSize = if (snap.phase == TimerPhase.GAP_WAIT) (digitFontSize.value * 0.65f).sp else digitFontSize,
+          color = if (snap.isRinging) alertColor else Color.White,
+          maxLines = 1,
+          softWrap = false,
+          modifier = Modifier.testTag("timer_fullscreen_digits"),
+        )
+        if (snap.isRinging || snap.phase == TimerPhase.PAUSED || snap.phase == TimerPhase.GAP_WAIT) {
+          Spacer(modifier = Modifier.height(6.dp))
+          Text(
+            text = when {
+              snap.isRinging -> "Tap anywhere to silence"
+              snap.phase == TimerPhase.GAP_WAIT -> "Next round starting"
+              else -> "Paused"
+            },
+            style = MaterialTheme.typography.titleMedium,
+            color = if (snap.isRinging) alertColor else MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    }
+
+    // Always keep compact Round and Speaker indicators visible when enabled.
+    if (roundsMode || turnIndicatorEnabled) {
+      Row(
+        modifier = Modifier
+          .align(Alignment.TopStart)
+          .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (roundsMode) {
+          Surface(
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f),
+            shape = RoundedCornerShape(50),
+          ) {
+            Text(
+              text = "Round ${snap.roundNumber}",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+              modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 5.dp)
+                .testTag("timer_fullscreen_round_badge"),
+            )
+          }
+        }
+        if (turnIndicatorEnabled) {
+          Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
+            shape = RoundedCornerShape(50),
+          ) {
+            Text(
+              text = "Speaker ${snap.currentSpeaker} of $turnGroupSize",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 5.dp)
+                .testTag("timer_fullscreen_speaker_badge"),
+            )
+          }
+        }
+      }
+    }
+
+    // Exit full-screen button (auto-hides after 3 seconds).
+    AnimatedVisibility(
+      visible = controlsVisible,
+      enter = fadeIn(),
+      exit = fadeOut(),
+      modifier = Modifier
+        .align(Alignment.TopEnd)
+        .padding(12.dp),
+    ) {
+      IconButton(
+        onClick = onExitFullScreen,
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+          .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+          .testTag("timer_exit_fullscreen_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.FullscreenExit,
+          contentDescription = "Exit full-screen timer",
+          tint = Color.White,
+        )
+      }
+    }
+
+    // Floating control bar (Start/Pause, Reset, Rounds switch) auto-hides after 3 seconds.
+    AnimatedVisibility(
+      visible = controlsVisible,
+      enter = fadeIn(),
+      exit = fadeOut(),
+      modifier = Modifier
+        .align(Alignment.BottomCenter)
+        .padding(horizontal = 16.dp, vertical = 16.dp),
+    ) {
+      Surface(
+        color = Color(0xE611161F),
+        shape = RoundedCornerShape(22.dp),
+        modifier = Modifier
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp))
+          .testTag("timer_fullscreen_controls"),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Button(
+            onClick = {
+              interactionNonce++
+              onStartPauseClick()
+            },
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+              .height(48.dp)
+              .testTag("timer_fullscreen_start_pause"),
+          ) {
+            Icon(
+              imageVector = if (isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
+              contentDescription = null,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              text = when {
+                isRunning -> "Pause"
+                snap.phase == TimerPhase.PAUSED -> "Resume"
+                else -> "Start"
+              },
+              fontWeight = FontWeight.Bold,
+            )
+          }
+
+          OutlinedButton(
+            onClick = {
+              interactionNonce++
+              controller.reset()
+            },
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+              .height(48.dp)
+              .testTag("timer_fullscreen_reset"),
+          ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Reset", fontWeight = FontWeight.Bold)
+          }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Text(
+              text = "Rounds",
+              style = MaterialTheme.typography.bodyMedium,
+              color = Color.White,
+            )
+            Switch(
+              checked = roundsMode,
+              onCheckedChange = { enabled ->
+                interactionNonce++
+                onToggleRounds(enabled)
+              },
+              modifier = Modifier.testTag("timer_fullscreen_rounds_switch"),
+            )
+          }
+        }
+      }
+    }
   }
 }
 
