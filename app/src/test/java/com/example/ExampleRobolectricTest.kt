@@ -25,6 +25,7 @@ import com.example.faces.engine.ColorSpec
 import com.example.faces.engine.DefinitionFace
 import com.example.faces.engine.FaceAssetRepository
 import com.example.faces.engine.FaceDefinitionParser
+import com.example.faces.engine.FaceEngine
 import com.example.faces.engine.FaceMath
 import com.example.faces.engine.GaugeSource
 import com.example.faces.engine.HandLayer
@@ -262,6 +263,37 @@ class ExampleRobolectricTest {
 
     val formatted = FaceMath.formatTemplate("{hour}:{minute} {ampm} | {nextEventTime} {nextEventTitle} | {timerRemaining} {timerRound}", data)
     assertEquals("3:30 PM | All day Staff Sync | 01:05 R2", formatted)
+  }
+
+  @Test
+  fun `formatTemplate returns empty string for ampm when device is in 24 hour mode`() {
+    val time12 = FaceTimeData(hour12 = 3, hour24 = 15, minute = 5, is24Hour = false, amPm = "PM")
+    assertEquals("3:05 PM", FaceMath.formatTemplate("{hour}:{minute} {ampm}", FaceData(time = time12)))
+
+    val time24 = time12.copy(is24Hour = true)
+    assertEquals("15:05 ", FaceMath.formatTemplate("{hour}:{minute} {ampm}", FaceData(time = time24)))
+    assertEquals("", FaceMath.formatTemplate("{ampm}", FaceData(time = time24)))
+  }
+
+  @Test
+  fun `dial bitmaps decode no larger than drawn pixel size and smooth frame refreshes day fields`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val bmp = FaceEngine.decodeBitmapForDialSize(context.resources, R.drawable.face_motorsport_m, 320)
+    assertNotNull(bmp)
+    assertTrue("Width exceeded dial pixel size: ${bmp!!.width}", bmp.width <= 320)
+    assertTrue("Height exceeded dial pixel size: ${bmp.height}", bmp.height <= 320)
+
+    FaceAssetRepository.ensureInitialized(context)
+    val def = FaceAssetRepository.getById("motorsport_m")!!
+    val face = DefinitionFace(def)
+    val target = FaceTimeData(dayOfMonth = 15, dayNameShort = "SUN", monthNameShort = "NOV")
+    val nextDayCal = Calendar.getInstance().apply {
+      set(2026, Calendar.DECEMBER, 1, 0, 0, 5)
+    }
+    face.updateTimeInPlace(nextDayCal, target, refreshCalendarDay = true)
+    assertEquals(1, target.dayOfMonth)
+    assertEquals("TUE", target.dayNameShort)
+    assertEquals("DEC", target.monthNameShort)
   }
 
   @Test

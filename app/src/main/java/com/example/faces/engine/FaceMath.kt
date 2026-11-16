@@ -121,7 +121,8 @@ internal object FaceMath {
     if (out.contains("{hour24}")) out = out.replace("{hour24}", "%02d".format(Locale.US, t.hour24))
     if (out.contains("{minute}")) out = out.replace("{minute}", "%02d".format(Locale.US, t.minute))
     if (out.contains("{second}")) out = out.replace("{second}", "%02d".format(Locale.US, t.second))
-    if (out.contains("{ampm}")) out = out.replace("{ampm}", t.amPm)
+    val amPmText = if (t.is24Hour) "" else t.amPm
+    if (out.contains("{ampm}")) out = out.replace("{ampm}", amPmText)
     if (out.contains("{day}")) out = out.replace("{day}", "%02d".format(Locale.US, t.dayOfMonth))
     if (out.contains("{dayName}")) out = out.replace("{dayName}", t.dayNameShort)
     if (out.contains("{monthName}")) out = out.replace("{monthName}", t.monthNameShort)

@@ -68,17 +68,60 @@ interface FaceDiagnosticsProvider {
 }
 
 data class FaceTimeData(
-  val hour12: Int = 12,
-  val hour24: Int = 0,
-  val minute: Int = 0,
-  val second: Int = 0,
-  val millis: Int = 0,
-  val is24Hour: Boolean = false,
-  val amPm: String = "AM",
-  val dayOfMonth: Int = 1,
-  val dayNameShort: String = "MON",
-  val monthNameShort: String = "JAN",
-)
+  var hour12: Int = 12,
+  var hour24: Int = 0,
+  var minute: Int = 0,
+  var second: Int = 0,
+  var millis: Int = 0,
+  var is24Hour: Boolean = false,
+  var amPm: String = "AM",
+  var dayOfMonth: Int = 1,
+  var dayNameShort: String = "MON",
+  var monthNameShort: String = "JAN",
+) {
+  /** Copies all fields from [other] in place so frame loops reuse this instance without allocating. */
+  fun copyFrom(other: FaceTimeData) {
+    hour12 = other.hour12
+    hour24 = other.hour24
+    minute = other.minute
+    second = other.second
+    millis = other.millis
+    is24Hour = other.is24Hour
+    amPm = other.amPm
+    dayOfMonth = other.dayOfMonth
+    dayNameShort = other.dayNameShort
+    monthNameShort = other.monthNameShort
+  }
+
+  companion object {
+    /** Returns uppercase 3-letter weekday abbreviation for [cal] without allocating formatters. */
+    fun dayNameShortFor(cal: Calendar): String = when (cal.get(Calendar.DAY_OF_WEEK)) {
+      Calendar.SUNDAY -> "SUN"
+      Calendar.MONDAY -> "MON"
+      Calendar.TUESDAY -> "TUE"
+      Calendar.WEDNESDAY -> "WED"
+      Calendar.THURSDAY -> "THU"
+      Calendar.FRIDAY -> "FRI"
+      else -> "SAT"
+    }
+
+    /** Returns uppercase 3-letter month abbreviation for [cal] without allocating formatters. */
+    fun monthNameShortFor(cal: Calendar): String = when (cal.get(Calendar.MONTH)) {
+      Calendar.JANUARY -> "JAN"
+      Calendar.FEBRUARY -> "FEB"
+      Calendar.MARCH -> "MAR"
+      Calendar.APRIL -> "APR"
+      Calendar.MAY -> "MAY"
+      Calendar.JUNE -> "JUN"
+      Calendar.JULY -> "JUL"
+      Calendar.AUGUST -> "AUG"
+      Calendar.SEPTEMBER -> "SEP"
+      Calendar.OCTOBER -> "OCT"
+      Calendar.NOVEMBER -> "NOV"
+      else -> "DEC"
+    }
+  }
+}
 
 data class FaceBatteryData(
   val levelPercent: Int = 100,
@@ -100,12 +143,21 @@ data class FaceStopwatchData(
 )
 
 data class FaceData(
-  val time: FaceTimeData = FaceTimeData(),
-  val battery: FaceBatteryData = FaceBatteryData(),
-  val nextEvent: NextCalendarEvent? = null,
-  val timer: FaceTimerData = FaceTimerData(),
-  val stopwatch: FaceStopwatchData = FaceStopwatchData(),
-)
+  var time: FaceTimeData = FaceTimeData(),
+  var battery: FaceBatteryData = FaceBatteryData(),
+  var nextEvent: NextCalendarEvent? = null,
+  var timer: FaceTimerData = FaceTimerData(),
+  var stopwatch: FaceStopwatchData = FaceStopwatchData(),
+) {
+  /** Updates this snapshot in place from [other], preserving the existing [time] instance when possible. */
+  fun copyFrom(other: FaceData) {
+    time.copyFrom(other.time)
+    battery = other.battery
+    nextEvent = other.nextEvent
+    timer = other.timer
+    stopwatch = other.stopwatch
+  }
+}
 
 /** Supplies reactive FaceData snapshots containing only the sources declared by the active face. */
 interface FaceDataSource {
@@ -263,29 +315,8 @@ internal class CoreFaceDataSource(context: Context) : FaceDataSource {
       val sec = cal.get(Calendar.SECOND)
       val ms = cal.get(Calendar.MILLISECOND)
       val dom = cal.get(Calendar.DAY_OF_MONTH)
-      val dow = when (cal.get(Calendar.DAY_OF_WEEK)) {
-        Calendar.SUNDAY -> "SUN"
-        Calendar.MONDAY -> "MON"
-        Calendar.TUESDAY -> "TUE"
-        Calendar.WEDNESDAY -> "WED"
-        Calendar.THURSDAY -> "THU"
-        Calendar.FRIDAY -> "FRI"
-        else -> "SAT"
-      }
-      val month = when (cal.get(Calendar.MONTH)) {
-        Calendar.JANUARY -> "JAN"
-        Calendar.FEBRUARY -> "FEB"
-        Calendar.MARCH -> "MAR"
-        Calendar.APRIL -> "APR"
-        Calendar.MAY -> "MAY"
-        Calendar.JUNE -> "JUN"
-        Calendar.JULY -> "JUL"
-        Calendar.AUGUST -> "AUG"
-        Calendar.SEPTEMBER -> "SEP"
-        Calendar.OCTOBER -> "OCT"
-        Calendar.NOVEMBER -> "NOV"
-        else -> "DEC"
-      }
+      val dow = FaceTimeData.dayNameShortFor(cal)
+      val month = FaceTimeData.monthNameShortFor(cal)
       val is24 = runCatching { DateFormat.is24HourFormat(context) }.getOrDefault(false)
       return FaceTimeData(
         hour12 = h12,

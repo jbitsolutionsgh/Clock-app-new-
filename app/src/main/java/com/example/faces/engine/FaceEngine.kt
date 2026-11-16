@@ -1,6 +1,7 @@
 package com.example.faces.engine
 
 import android.content.Context
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Paint
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -49,14 +50,9 @@ import kotlin.math.sin
 /**
  * Data-driven watch face renderer.
  * Draws all 7 layer types relative to R (half the dial side) from bottom to top while reusing
- * Paint/Typeface objects and caching only the active face's decoded dial bitmaps.
+ * Paint/Typeface objects and decoding dial images at the exact pixel size they are drawn.
  */
 internal object FaceEngine {
-
-  private data class DecodedDialBitmap(
-    val raw: Bitmap,
-    val image: ImageBitmap,
-  )
 
   private val sampleThumbnailData = FaceData(
     time = FaceTimeData(
@@ -74,17 +70,18 @@ internal object FaceEngine {
   )
 
   /**
-   * Renders [definition] inside a 94% shorter-side stage using live [data] and [mode].
-   * Image layers are drawn unclipped; colour tokens resolve against [MaterialTheme.colorScheme].
+   * Renders [definition] inside a 94% shorter-side stage reading [dataProvider] strictly inside the
+   * Canvas draw block so smooth frame ticks redraw the canvas without recomposing the layout.
    */
   @Composable
   fun Render(
     definition: FaceDefinition,
-    data: FaceData,
+    dataProvider: () -> FaceData,
     mode: FaceRenderMode,
     modifier: Modifier = Modifier,
   ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val colorScheme = MaterialTheme.colorScheme
 
     val imageDrawableNames = remember(definition) {
@@ -92,30 +89,6 @@ internal object FaceEngine {
         .filterIsInstance<ImageLayer>()
         .map { it.drawableName }
         .distinct()
-    }
-
-    val decodedBitmaps = remember(imageDrawableNames) {
-      val map = HashMap<String, DecodedDialBitmap>(imageDrawableNames.size)
-      for (name in imageDrawableNames) {
-        val resId = resolveDrawableId(context, name)
-        if (resId != 0) {
-          val raw = runCatching { BitmapFactory.decodeResource(context.resources, resId) }.getOrNull()
-          if (raw != null) {
-            map[name] = DecodedDialBitmap(raw = raw, image = raw.asImageBitmap())
-          }
-        }
-      }
-      map
-    }
-
-    DisposableEffect(decodedBitmaps) {
-      onDispose {
-        decodedBitmaps.values.forEach { entry ->
-          if (!entry.raw.isRecycled) {
-            entry.raw.recycle()
-          }
-        }
-      }
     }
 
     val typefaces = rememberTypefaces(context)
@@ -127,12 +100,29 @@ internal object FaceEngine {
     ) {
       val shorterSide = minOf(maxWidth, maxHeight)
       val dialSide = shorterSide * 0.94f
+      val dialSidePx = with(density) { dialSide.roundToPx().coerceAtLeast(1) }
+
+      // Decode dial images no larger than the drawn dial's pixel size; GC manages old bitmaps safely.
+      val decodedBitmaps = remember(imageDrawableNames, dialSidePx) {
+        val map = HashMap<String, ImageBitmap>(imageDrawableNames.size)
+        for (name in imageDrawableNames) {
+          val resId = resolveDrawableId(context, name)
+          if (resId != 0) {
+            val bmp = decodeBitmapForDialSize(context.resources, resId, dialSidePx)
+            if (bmp != null) {
+              map[name] = bmp.asImageBitmap()
+            }
+          }
+        }
+        map
+      }
 
       Box(
         modifier = Modifier.size(dialSide),
         contentAlignment = Alignment.Center,
       ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+          val data = dataProvider()
           drawFaceLayers(
             definition = definition,
             data = data,
@@ -198,7 +188,7 @@ internal object FaceEngine {
     data: FaceData,
     mode: FaceRenderMode,
     colorScheme: ColorScheme,
-    bitmaps: Map<String, DecodedDialBitmap>,
+    bitmaps: Map<String, ImageBitmap>,
     typefaces: ResolvedTypefaces,
     textPaint: Paint,
   ) {
@@ -225,11 +215,9 @@ internal object FaceEngine {
 
   private fun DrawScope.drawImageLayer(
     layer: ImageLayer,
-    bitmaps: Map<String, DecodedDialBitmap>,
+    bitmaps: Map<String, ImageBitmap>,
   ) {
-    val entry = bitmaps[layer.drawableName] ?: return
-    if (entry.raw.isRecycled) return
-    val img = entry.image
+    val img = bitmaps[layer.drawableName] ?: return
     if (img.width <= 0 || img.height <= 0) return
 
     val scale = minOf(size.width / img.width.toFloat(), size.height / img.height.toFloat())
@@ -622,6 +610,43 @@ internal object FaceEngine {
       monoNormal = Typeface.create(monoBase, Typeface.NORMAL),
       monoBold = Typeface.create(monoBase, Typeface.BOLD),
     )
+  }
+
+  /**
+   * Decodes [resId] using power-of-2 [BitmapFactory.Options.inSampleSize] and scales down if still
+   * larger than [maxDialPx] so the resulting bitmap is never larger than the drawn dial's pixel size.
+   */
+  internal fun decodeBitmapForDialSize(
+    resources: Resources,
+    @DrawableRes resId: Int,
+    maxDialPx: Int,
+  ): Bitmap? {
+    val targetMax = maxDialPx.coerceAtLeast(1)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeResource(resources, resId, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sampleSize = 1
+    while ((bounds.outWidth / (sampleSize * 2)) >= targetMax &&
+      (bounds.outHeight / (sampleSize * 2)) >= targetMax
+    ) {
+      sampleSize *= 2
+    }
+
+    val opts = BitmapFactory.Options().apply {
+      inSampleSize = sampleSize
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    val decoded = runCatching { BitmapFactory.decodeResource(resources, resId, opts) }.getOrNull()
+      ?: return null
+
+    if (decoded.width <= targetMax && decoded.height <= targetMax) {
+      return decoded
+    }
+    val scale = minOf(targetMax.toFloat() / decoded.width, targetMax.toFloat() / decoded.height)
+    val dstW = (decoded.width * scale).roundToInt().coerceIn(1, targetMax)
+    val dstH = (decoded.height * scale).roundToInt().coerceIn(1, targetMax)
+    return Bitmap.createScaledBitmap(decoded, dstW, dstH, true)
   }
 
   /**
