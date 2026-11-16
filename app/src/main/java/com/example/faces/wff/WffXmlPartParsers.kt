@@ -4,21 +4,32 @@ import android.graphics.Paint
 import org.xmlpull.v1.XmlPullParser
 import java.util.Locale
 
-/** Shared parser accumulator tracking compatibility statuses, resources, fonts, and metadata. */
-internal class WffParseContext {
+/** Shared parser accumulator tracking compatibility statuses, resources, fonts, strings, and metadata. */
+internal class WffParseContext(
+  val stringResources: Map<String, String> = emptyMap(),
+) {
   val metadata = LinkedHashMap<String, String>()
   val referencedResources = LinkedHashSet<String>()
   val referencedFonts = LinkedHashSet<String>()
+  val usedSources = LinkedHashSet<String>()
   val userConfigs = mutableListOf<WffUserConfig>()
+  var flavors: WffFlavorSet? = null
+  var localizationCalendar: String? = null
+  var localizationLocales: String? = null
   val bitmapFonts = LinkedHashMap<String, WffBitmapFont>()
   val items = mutableListOf<WffReportItem>()
   var nextAnimKeyId = 1
 
   fun nextTransformKey(target: String): String = "tr_${nextAnimKeyId++}_$target"
 
-  /** Compiles [rawExpr] and automatically logs unknown sources or functions as PARTLY_DRAWN. */
+  fun resolveString(raw: String): String = WffStringResources.resolve(raw, stringResources)
+
+  fun resolveStringOrNull(raw: String?): String? = WffStringResources.resolveOrNull(raw, stringResources)
+
+  /** Compiles [rawExpr], records referenced data sources, and logs unknown symbols as PARTLY_DRAWN. */
   fun compileTracked(ownerElement: String, rawExpr: String): CompiledWffExpr {
     val compiled = WffExpression.compile(rawExpr)
+    WffExpression.collectAstSources(compiled.ast, usedSources)
     if (compiled.unknownSources.isNotEmpty() || compiled.unknownFunctions.isNotEmpty()) {
       val details = buildList {
         if (compiled.unknownSources.isNotEmpty()) add("unknown sources: ${compiled.unknownSources.joinToString()}")
@@ -37,7 +48,6 @@ internal class WffParseContext {
       }
       return
     }
-    // Upgrade existing DRAWN entry if a sub-attribute made this element PARTLY_DRAWN.
     val existingIdx = items.indexOfFirst { it.element == element && it.detail == detail }
     if (existingIdx < 0) {
       items += WffReportItem(element, status, detail)
@@ -160,14 +170,16 @@ internal object WffXmlPartParsers {
     when (parser.name) {
       "ColorConfiguration" -> {
         val id = parser.getAttributeValue(null, "id")?.trim().orEmpty()
-        val displayName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val rawDisplay = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val displayName = ctx.resolveString(rawDisplay)
         val defaultValue = parser.getAttributeValue(null, "defaultValue")?.trim().orEmpty()
         val options = mutableListOf<WffColorOption>()
         while (parser.next() != XmlPullParser.END_TAG) {
           if (parser.eventType != XmlPullParser.START_TAG) continue
           if (parser.name == "ColorOption") {
             val optId = parser.getAttributeValue(null, "id")?.trim().orEmpty()
-            val optName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { optId }
+            val rawOptName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { optId }
+            val optName = ctx.resolveString(rawOptName)
             val rawColors = parser.getAttributeValue(null, "colors")?.trim().orEmpty()
             val colors = rawColors.split(Regex("[\\s,]+")).mapNotNull { parseColorNullable(it) }
             if (optId.isNotEmpty() && colors.isNotEmpty()) {
@@ -183,14 +195,16 @@ internal object WffXmlPartParsers {
       }
       "ListConfiguration" -> {
         val id = parser.getAttributeValue(null, "id")?.trim().orEmpty()
-        val displayName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val rawDisplay = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val displayName = ctx.resolveString(rawDisplay)
         val defaultValue = parser.getAttributeValue(null, "defaultValue")?.trim().orEmpty()
         val options = mutableListOf<WffListOption>()
         while (parser.next() != XmlPullParser.END_TAG) {
           if (parser.eventType != XmlPullParser.START_TAG) continue
           if (parser.name == "ListOption") {
             val optId = parser.getAttributeValue(null, "id")?.trim().orEmpty()
-            val optName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { optId }
+            val rawOptName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { optId }
+            val optName = ctx.resolveString(rawOptName)
             if (optId.isNotEmpty()) options += WffListOption(optId, optName)
           }
           skipSubtree(parser)
@@ -202,7 +216,8 @@ internal object WffXmlPartParsers {
       }
       "BooleanConfiguration" -> {
         val id = parser.getAttributeValue(null, "id")?.trim().orEmpty()
-        val displayName = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val rawDisplay = parser.getAttributeValue(null, "displayName")?.trim().orEmpty().ifEmpty { id }
+        val displayName = ctx.resolveString(rawDisplay)
         val defRaw = parser.getAttributeValue(null, "defaultValue")?.trim().orEmpty()
         val defBool = defRaw.equals("TRUE", ignoreCase = true) || defRaw == "1"
         skipSubtree(parser)
@@ -211,6 +226,8 @@ internal object WffXmlPartParsers {
           ctx.recordItem("BooleanConfiguration", WffElementStatus.DRAWN)
         }
       }
+      "PhotosConfiguration" -> WffComplicationAndFlavorParser.parsePhotosConfiguration(parser, ctx)
+      "Flavors" -> WffComplicationAndFlavorParser.parseFlavors(parser, ctx)
       else -> {
         ctx.recordItem(parser.name, WffElementStatus.SKIPPED, "Unsupported configuration type.")
         skipSubtree(parser)
@@ -292,6 +309,9 @@ internal object WffXmlPartParsers {
     "LIGHTEN" -> WffBlendMode.LIGHTEN
     "SRC_IN" -> WffBlendMode.SRC_IN
     "SRC_ATOP" -> WffBlendMode.SRC_ATOP
+    "DST_IN" -> WffBlendMode.DST_IN
+    "DST_OUT" -> WffBlendMode.DST_OUT
+    "DST_OVER" -> WffBlendMode.DST_OVER
     "XOR" -> WffBlendMode.XOR
     else -> WffBlendMode.SRC_OVER
   }

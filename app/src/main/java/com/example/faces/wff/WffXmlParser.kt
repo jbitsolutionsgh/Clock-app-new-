@@ -34,6 +34,7 @@ internal object WffXmlParser {
     xmlText: String,
     faceId: String,
     fallbackName: String,
+    stringResources: Map<String, String> = emptyMap(),
   ): WffParseResult {
     val cleanXml = xmlText.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
     if (cleanXml.isEmpty() || !cleanXml.startsWith("<")) {
@@ -45,7 +46,7 @@ internal object WffXmlParser {
       val parser = factory.newPullParser()
       parser.setInput(StringReader(cleanXml))
 
-      val ctx = WffParseContext()
+      val ctx = WffParseContext(stringResources = stringResources)
       var width = 450f
       var height = 450f
       var clipShape = WffClipShape.CIRCLE
@@ -108,10 +109,15 @@ internal object WffXmlParser {
           sceneVariants = sceneVariants,
           nodes = nodes,
           userConfigs = ctx.userConfigs.toList(),
+          flavors = ctx.flavors,
           bitmapFonts = ctx.bitmapFonts.toMap(),
           metadata = ctx.metadata.toMap(),
+          stringResources = stringResources,
+          localizationCalendar = ctx.localizationCalendar,
+          localizationLocales = ctx.localizationLocales,
           referencedResources = ctx.referencedResources.toSet(),
           referencedFonts = ctx.referencedFonts.toSet(),
+          usedSources = ctx.usedSources.toSet(),
           report = WffCompatibilityReport(items = ctx.items.toList()),
         ),
       )
@@ -130,13 +136,15 @@ internal object WffXmlParser {
       when (parser.name) {
         "Metadata" -> {
           val key = parser.getAttributeValue(null, "key")?.trim().orEmpty()
-          val value = parser.getAttributeValue(null, "value")?.trim().orEmpty()
+          val rawValue = parser.getAttributeValue(null, "value")?.trim().orEmpty()
+          val value = ctx.resolveStringOrNull(rawValue) ?: rawValue
           if (key.isNotEmpty()) ctx.metadata[key] = value
           ctx.recordItem("Metadata", WffElementStatus.DRAWN)
           WffXmlPartParsers.skipSubtree(parser)
         }
+        "Localization" -> parseLocalization(parser, ctx)
         "UserConfigurations" -> WffXmlPartParsers.parseUserConfigurations(parser, ctx)
-        "ColorConfiguration", "ListConfiguration", "BooleanConfiguration" ->
+        "ColorConfiguration", "ListConfiguration", "BooleanConfiguration", "PhotosConfiguration", "Flavors" ->
           WffXmlPartParsers.parseSingleUserConfig(parser, ctx)
         "BitmapFonts" -> WffXmlPartParsers.parseBitmapFonts(parser, ctx)
         "BitmapFont" -> WffXmlPartParsers.parseSingleBitmapFont(parser, ctx)
@@ -169,6 +177,17 @@ internal object WffXmlParser {
     }
   }
 
+  private fun parseLocalization(parser: XmlPullParser, ctx: WffParseContext) {
+    parser.getAttributeValue(null, "calendar")?.trim()?.ifEmpty { null }?.let {
+      ctx.localizationCalendar = it
+    }
+    parser.getAttributeValue(null, "locales")?.trim()?.ifEmpty { null }?.let {
+      ctx.localizationLocales = it
+    }
+    ctx.recordItem("Localization", WffElementStatus.DRAWN)
+    WffXmlPartParsers.skipSubtree(parser)
+  }
+
   private fun parseSceneNode(parser: XmlPullParser, ctx: WffParseContext): WffSceneNode? {
     val tag = parser.name
     return when (tag) {
@@ -179,6 +198,11 @@ internal object WffXmlParser {
       "PartImage" -> parsePartImage(parser, ctx)
       "PartText" -> parsePartText(parser, ctx)
       "PartDraw" -> parsePartDraw(parser, ctx)
+      "ComplicationSlot" -> WffComplicationAndFlavorParser.parseComplicationSlot(parser, ctx, ::parseSceneNode)
+      "Localization" -> {
+        parseLocalization(parser, ctx)
+        null
+      }
       else -> {
         ctx.recordItem(tag, WffElementStatus.SKIPPED, reasonForUnsupported(tag))
         WffXmlPartParsers.skipSubtree(parser)
@@ -478,6 +502,7 @@ internal object WffXmlParser {
             }
           }
         }
+        "Localization" -> parseLocalization(parser, ctx)
         "Shadow" -> shadow = WffXmlPartParsers.parseShadow(parser, ctx)
         "Outline" -> outline = WffXmlPartParsers.parseOutline(parser, ctx)
         "Transform" -> WffXmlPartParsers.parseTransform(parser, ctx)?.let { transforms += it }
@@ -510,8 +535,9 @@ internal object WffXmlParser {
     val resources = mutableListOf<String>()
     parser.getAttributeValue(null, "resource")?.trim()?.ifEmpty { null }?.let {
       resources += it
-      ctx.referencedResources += it
+      if (!it.startsWith("[")) ctx.referencedResources += it
     }
+    var photosSpec: WffPhotosSpec? = null
     val transforms = mutableListOf<WffTransform>()
     val variants = mutableListOf<WffVariant>()
 
@@ -523,7 +549,7 @@ internal object WffXmlParser {
           parser.getAttributeValue(null, "blendMode")?.let { blendMode = WffXmlPartParsers.parseBlendMode(it) }
           parser.getAttributeValue(null, "resource")?.trim()?.ifEmpty { null }?.let {
             resources += it
-            ctx.referencedResources += it
+            if (!it.startsWith("[")) ctx.referencedResources += it
           }
           WffXmlPartParsers.skipSubtree(parser)
         }
@@ -534,12 +560,13 @@ internal object WffXmlParser {
             if (parser.name == "Image") {
               parser.getAttributeValue(null, "resource")?.trim()?.ifEmpty { null }?.let {
                 resources += it
-                ctx.referencedResources += it
+                if (!it.startsWith("[")) ctx.referencedResources += it
               }
             }
             WffXmlPartParsers.skipSubtree(parser)
           }
         }
+        "Photos" -> photosSpec = WffComplicationAndFlavorParser.parsePhotosTag(parser, ctx)
         "Transform" -> WffXmlPartParsers.parseTransform(parser, ctx)?.let { transforms += it }
         "Variant" -> WffXmlPartParsers.parseVariant(parser, ctx)?.let { variants += it }
         else -> {
@@ -554,7 +581,7 @@ internal object WffXmlParser {
       pivotX = c.pivotX, pivotY = c.pivotY, angle = c.angle,
       scaleX = c.scaleX, scaleY = c.scaleY, alpha = c.alpha, visible = c.visible,
       tintColor = tintColor, tintColorExpr = tintExpr, blendMode = blendMode,
-      resources = resources, transforms = transforms, variants = variants,
+      resources = resources, photos = photosSpec, transforms = transforms, variants = variants,
     )
   }
 
@@ -592,6 +619,7 @@ internal object WffXmlParser {
         }
         "Shadow" -> shadow = WffXmlPartParsers.parseShadow(parser, ctx)
         "Outline" -> outline = WffXmlPartParsers.parseOutline(parser, ctx)
+        "Localization" -> parseLocalization(parser, ctx)
         "Font", "BitmapFont" -> {
           val isBitmap = tagName == "BitmapFont"
           val fam = parser.getAttributeValue(null, "family")?.trim()
@@ -615,7 +643,9 @@ internal object WffXmlParser {
             else if (ev == XmlPullParser.START_TAG) handleContent(parser.name)
           }
           val literal = textBuf.toString().trim()
-          if (literal.isNotEmpty() && rawText == null && template == null) rawText = literal
+          if (literal.isNotEmpty() && rawText == null && template == null) {
+            rawText = ctx.resolveStringOrNull(literal) ?: literal
+          }
         }
         else -> {
           ctx.recordItem(tagName, WffElementStatus.SKIPPED, reasonForUnsupported(tagName))
@@ -638,9 +668,11 @@ internal object WffXmlParser {
             else if (ev == XmlPullParser.START_TAG) handleContent(parser.name)
           }
           val trimmed = textBuf.toString().trim()
-          if (trimmed.isNotEmpty() && rawText == null && template == null) rawText = trimmed
+          if (trimmed.isNotEmpty() && rawText == null && template == null) {
+            rawText = ctx.resolveStringOrNull(trimmed) ?: trimmed
+          }
         }
-        "Template", "Parameter", "Font", "BitmapFont", "Shadow", "Outline" -> handleContent(parser.name)
+        "Template", "Parameter", "Font", "BitmapFont", "Shadow", "Outline", "Localization" -> handleContent(parser.name)
         "Transform" -> WffXmlPartParsers.parseTransform(parser, ctx)?.let { transforms += it }
         "Variant" -> WffXmlPartParsers.parseVariant(parser, ctx)?.let { variants += it }
         else -> {
@@ -679,13 +711,15 @@ internal object WffXmlParser {
           val exprStr = parser.getAttributeValue(null, "expression")?.trim().orEmpty()
           parameters += ctx.compileTracked("Parameter", exprStr)
           WffXmlPartParsers.skipSubtree(parser)
+        } else if (parser.name == "Localization") {
+          parseLocalization(parser, ctx)
         } else {
           ctx.recordItem(parser.name, WffElementStatus.SKIPPED, reasonForUnsupported(parser.name))
           WffXmlPartParsers.skipSubtree(parser)
         }
       }
     }
-    return sb.toString().trim()
+    return ctx.resolveStringOrNull(sb.toString().trim()) ?: sb.toString().trim()
   }
 
   private fun parsePartDraw(parser: XmlPullParser, ctx: WffParseContext): WffSceneNode.PartDraw {

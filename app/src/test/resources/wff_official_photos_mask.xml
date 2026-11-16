@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Photos Mask Official" />
+  <UserConfigurations>
+    <PhotosConfiguration id="single_photo" displayName="Background Photo" configType="SINGLE" maxNumberOfPhotos="1" />
+  </UserConfigurations>
+  <Scene backgroundColor="#FF000000">
+    <Group x="25" y="25" width="400" height="400">
+      <PartImage x="0" y="0" width="400" height="400">
+        <Photos source="[CONFIGURATION.single_photo]" defaultImageResource="photo_default_bg" change="TAP" />
+      </PartImage>
+      <PartImage x="0" y="0" width="400" height="400" blendMode="DST_IN">
+        <Image resource="photo_circle_mask" />
+      </PartImage>
+    </Group>
+    <DigitalClock x="45" y="300" width="360" height="70">
+      <TimeText format="HH:mm" hourFormat="24" align="CENTER" x="0" y="0" width="360" height="70">
+        <Font family="SYNC_TO_DEVICE" size="48" color="#FFFFFFFF" />
+      </TimeText>
+    </DigitalClock>
+  </Scene>
+</WatchFace>

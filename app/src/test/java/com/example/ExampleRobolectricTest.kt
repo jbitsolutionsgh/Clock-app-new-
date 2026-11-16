@@ -34,6 +34,7 @@ import com.example.faces.engine.ShowCondition
 import com.example.standby.DeviceCalendarInfo
 import com.example.standby.DeviceCalendarProvider
 import com.example.standby.StandByCalendarCoordinator
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -480,9 +481,13 @@ class ExampleRobolectricTest {
     assertEquals(450f, face.width, 0.01f)
     assertEquals(450f, face.height, 0.01f)
     assertEquals(com.example.faces.wff.WffClipShape.CIRCLE, face.clipShape)
-    assertTrue(face.report.drawnElements.containsAll(listOf("WatchFace", "Scene", "AnalogClock", "HourHand", "SecondHand", "DigitalClock", "PartDraw", "PartText", "PartImage")))
-    assertEquals(1, face.report.skippedItems.size)
-    assertEquals("ComplicationSlot", face.report.skippedItems.first().element)
+    assertTrue(face.report.drawnElements.containsAll(listOf("WatchFace", "Scene", "AnalogClock", "HourHand", "SecondHand", "DigitalClock", "PartDraw", "PartText", "PartImage", "ComplicationSlot")))
+    assertEquals(0, face.report.skippedItems.size)
+
+    val unknownTagXml = """<WatchFace width="450" height="450"><Scene><Launch /></Scene></WatchFace>"""
+    val unknownParsed = (com.example.faces.wff.WffXmlParser.parse(unknownTagXml, "u", "U") as com.example.faces.wff.WffParseResult.Success).face
+    assertEquals(1, unknownParsed.report.skippedItems.size)
+    assertEquals("Launch", unknownParsed.report.skippedItems.first().element)
 
     assertTrue(com.example.faces.wff.WffXmlParser.isBinaryXml(byteArrayOf(0x03, 0x00, 0x08, 0x00)))
     assertFalse(com.example.faces.wff.WffXmlParser.isBinaryXml(xmlText.toByteArray()))
@@ -657,9 +662,9 @@ class ExampleRobolectricTest {
     assertFalse(slot.validFor(batExpr, ctx))
 
     // Unknown source/function safely returns 0.0 and records diagnostics
-    val badExpr = com.example.faces.wff.WffExpression.compile("[HEART_RATE] + mysteryFn(1)")
+    val badExpr = com.example.faces.wff.WffExpression.compile("[UNKNOWN_SENSOR_XYZ] + mysteryFn(1)")
     assertEquals(0.0, com.example.faces.wff.WffExpression.evaluate(badExpr, ctx).asDouble(), 0.001)
-    assertTrue(badExpr.unknownSources.contains("HEART_RATE"))
+    assertTrue(badExpr.unknownSources.contains("UNKNOWN_SENSOR_XYZ"))
     assertTrue(badExpr.unknownFunctions.contains("mysteryFn"))
   }
 
@@ -766,6 +771,247 @@ class ExampleRobolectricTest {
 
     prefs.deleteWffFaceConfigs("wff_adv")
     assertTrue(prefs.getWffFaceConfig("wff_adv").isEmpty())
+  }
+
+  @Test
+  fun `wff string resources resolve from strings xml and arsc with locale fallback and no localization penalty`() {
+    val arscStringsBytes = buildMinimalTestArsc(
+      globalStrings = listOf("Tap Here", "Morning Class"),
+      typeName = "string",
+      entries = listOf("arsc_label" to 0, "greeting" to 1),
+    )
+    assertEquals("Tap Here", com.example.faces.wff.ArscResourceTableReader.readStrings(arscStringsBytes)["arsc_label"])
+
+    val zipOut = java.io.ByteArrayOutputStream()
+    val wfXml = """
+      <WatchFace width="450" height="450" clipShape="CIRCLE">
+        <Metadata key="title" value="Localized Face" />
+        <UserConfigurations>
+          <BooleanConfiguration id="flag" displayName="toggle_label" defaultValue="TRUE" />
+        </UserConfigurations>
+        <Scene backgroundColor="#FF000000">
+          <Localization calendar="GREGORIAN" locales="en_US es_ES" />
+          <PartText x="0" y="100" width="450" height="60">
+            <Text align="CENTER">
+              <Font family="SYNC_TO_DEVICE" size="24" color="#FFFFFFFF">
+                <Template>%s</Template>
+                <Parameter expression="greeting" />
+              </Font>
+            </Text>
+          </PartText>
+        </Scene>
+      </WatchFace>
+    """.trimIndent()
+    java.util.zip.ZipOutputStream(zipOut).use { zos ->
+      zos.putNextEntry(java.util.zip.ZipEntry("res/raw/watchface.xml"))
+      zos.write(wfXml.toByteArray(Charsets.UTF_8))
+      zos.closeEntry()
+      zos.putNextEntry(java.util.zip.ZipEntry("res/values/strings.xml"))
+      zos.write("""<resources><string name="greeting">Hello Teacher</string><string name="toggle_label">Show Ring</string></resources>""".toByteArray(Charsets.UTF_8))
+      zos.closeEntry()
+      zos.putNextEntry(java.util.zip.ZipEntry("res/values-es/strings.xml"))
+      zos.write("""<resources><string name="greeting">Hola Clase</string></resources>""".toByteArray(Charsets.UTF_8))
+      zos.closeEntry()
+      zos.putNextEntry(java.util.zip.ZipEntry("resources.arsc"))
+      zos.write(arscStringsBytes)
+      zos.closeEntry()
+    }
+
+    val tmpZip = java.io.File.createTempFile("loc_test", ".zip")
+    try {
+      tmpZip.writeBytes(zipOut.toByteArray())
+      java.util.zip.ZipFile(tmpZip).use { zf ->
+        val entries = zf.entries().asSequence().toList()
+        val esStrings = com.example.faces.wff.WffStringResources.loadFromArchive(zf, entries, arscStringsBytes, java.util.Locale("es", "ES"))
+        assertEquals("Hola Clase", esStrings["greeting"])
+        assertEquals("Show Ring", esStrings["toggle_label"])
+        assertEquals("Tap Here", esStrings["arsc_label"])
+
+        val frStrings = com.example.faces.wff.WffStringResources.loadFromArchive(zf, entries, arscStringsBytes, java.util.Locale.FRENCH)
+        assertEquals("Hello Teacher", frStrings["greeting"])
+      }
+    } finally {
+      tmpZip.delete()
+    }
+
+    val parsed = com.example.faces.wff.WffXmlParser.parse(
+      wfXml,
+      "loc_id",
+      "Loc",
+      mapOf("greeting" to "Hello Teacher", "toggle_label" to "Show Ring"),
+    ) as com.example.faces.wff.WffParseResult.Success
+    val face = parsed.face
+    assertEquals("Show Ring", face.userConfigs.first().displayName)
+    assertEquals(100, face.report.scorePercent)
+    assertEquals("GREGORIAN", face.localizationCalendar)
+    val expr = com.example.faces.wff.WffExpression.compile("greeting")
+    val evalCtx = com.example.faces.wff.WffEvalContext(data = FaceData(), strings = face.stringResources)
+    assertEquals("Hello Teacher", com.example.faces.wff.WffExpression.evaluate(expr, evalCtx).asString())
+  }
+
+  @Test
+  fun `duplicate wff import prompts replace or cancel safely`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val xml = """<WatchFace width="450" height="450"><Metadata key="title" value="Dup Test Face" /><Scene><DigitalClock x="0" y="0" width="450" height="100"><TimeText format="HH:mm" /></DigitalClock></Scene></WatchFace>"""
+
+    val first = com.example.faces.wff.WffStorageManager.importFromStream(
+      context, "dup_face.xml", java.io.ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)),
+    )
+    assertTrue(first is com.example.faces.wff.WffImportResult.Success)
+    val firstEntry = (first as com.example.faces.wff.WffImportResult.Success).entry
+
+    val second = com.example.faces.wff.WffStorageManager.importFromStream(
+      context, "dup_face.xml", java.io.ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)),
+    )
+    assertTrue(second is com.example.faces.wff.WffImportResult.DuplicateFound)
+    val dup = second as com.example.faces.wff.WffImportResult.DuplicateFound
+    assertEquals(firstEntry.id, dup.existingFace.id)
+    assertTrue(dup.stagedFile.exists())
+
+    val replaced = com.example.faces.wff.WffStorageManager.replaceImportedFace(
+      context, dup.stagedFile, dup.sourceFileName, dup.existingFace.id,
+    )
+    assertTrue(replaced is com.example.faces.wff.WffImportResult.Success)
+    assertEquals(firstEntry.id, (replaced as com.example.faces.wff.WffImportResult.Success).entry.id)
+    assertFalse(dup.stagedFile.exists())
+
+    // Clean up
+    assertTrue(com.example.faces.wff.WffStorageManager.deleteFace(context, firstEntry.id))
+  }
+
+  @Test
+  fun `complication resolver maps offline auraclock data and tap targets`() {
+    val slot = com.example.faces.wff.WffSceneNode.ComplicationSlot(
+      slotId = "1",
+      displayName = "Left",
+      x = 0f, y = 0f, width = 150f, height = 150f,
+      supportedTypes = listOf("RANGED_VALUE", "SHORT_TEXT", "LONG_TEXT"),
+      boundingShape = com.example.faces.wff.WffBoundingShape.Oval(0f, 0f, 150f, 150f),
+      defaultProviderPolicy = com.example.faces.wff.WffDefaultProviderPolicy("STEP_COUNT", "RANGED_VALUE"),
+    )
+    assertEquals(
+      com.example.faces.wff.AuraComplicationProvider.STEPS,
+      com.example.faces.wff.AuraComplicationProvider.fromPolicy(slot.defaultProviderPolicy, slot.supportedTypes),
+    )
+
+    val data = FaceData(
+      time = FaceTimeData(dayOfMonth = 18, dayNameShort = "WED", monthNameShort = "NOV"),
+      battery = FaceBatteryData(levelPercent = 74, isCharging = true),
+      nextEvent = NextCalendarEvent("Science Fair", 0L, 0L, isAllDay = true),
+      timer = FaceTimerData(phase = TimerPhase.RUNNING, remainingMs = 90_000L, totalDurationMs = 180_000L, roundNumber = 2),
+      sensors = com.example.core.FaceSensorData(stepCount = 4321, stepGoal = 10_000, hasStepPermission = true, stepHardwarePresent = true),
+    )
+
+    val stepsRes = com.example.faces.wff.WffComplicationResolver.resolve(slot, com.example.faces.wff.AuraComplicationProvider.STEPS, data)
+    assertEquals("4,321", stepsRes.text)
+    assertEquals(4321f, stepsRes.rangedValue, 0.1f)
+    assertEquals(com.example.core.AppTabTarget.DIAGNOSTICS, stepsRes.provider.tapTarget)
+
+    val timerRes = com.example.faces.wff.WffComplicationResolver.resolve(slot, com.example.faces.wff.AuraComplicationProvider.TIMER, data)
+    assertEquals("01:30", timerRes.text)
+    assertEquals("R2", timerRes.title)
+    assertEquals(com.example.core.AppTabTarget.TIMER, timerRes.provider.tapTarget)
+
+    val calRes = com.example.faces.wff.WffComplicationResolver.resolve(slot, com.example.faces.wff.AuraComplicationProvider.NEXT_EVENT, data, showEventTitles = true)
+    assertTrue(calRes.title.contains("Science Fair"))
+    assertEquals(com.example.core.AppTabTarget.SETTINGS_CALENDAR, calRes.provider.tapTarget)
+  }
+
+  @Test
+  fun `step counter rollover reboot math and on demand sensor listener teardown`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    val sensorSource = com.example.core.CoreFaceSensorSource(context, prefs)
+
+    // Same day incremental steps
+    val (d1, b1) = com.example.core.CoreFaceSensorSource.computeDailySteps(5000f, todayKey = 2026320, savedDayKey = 2026320, savedBaseline = 4200f)
+    assertEquals(800, d1)
+    assertEquals(4200f, b1, 0.01f)
+
+    // Day rollover resets baseline to current cumulative
+    val (dRoll, bRoll) = com.example.core.CoreFaceSensorSource.computeDailySteps(5500f, todayKey = 2026321, savedDayKey = 2026320, savedBaseline = 4200f)
+    assertEquals(0, dRoll)
+    assertEquals(5500f, bRoll, 0.01f)
+
+    // Phone reboot makes cumulative < savedBaseline -> resets baseline cleanly
+    val (dBoot, bBoot) = com.example.core.CoreFaceSensorSource.computeDailySteps(120f, todayKey = 2026321, savedDayKey = 2026321, savedBaseline = 5500f)
+    assertEquals(0, dBoot)
+    assertEquals(120f, bBoot, 0.01f)
+
+    // Observing then cancelling ensures 0 active listeners remain
+    val job = launch {
+      sensorSource.observeSensors(setOf(com.example.core.FaceSensorType.ACCELEROMETER, com.example.core.FaceSensorType.LIGHT)).collect { }
+    }
+    kotlinx.coroutines.delay(50)
+    job.cancel()
+    job.join()
+    assertEquals(0, sensorSource.diagnostics.value.activeListenersCount)
+  }
+
+  @Test
+  fun `all seven official google wff sample templates import parse score and provenance cleanly`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val sampleFiles = listOf(
+      "wff_official_simple_digital.xml",
+      "wff_official_simple_analog.xml",
+      "wff_official_complications.xml",
+      "wff_official_flavors.xml",
+      "wff_official_weather.xml",
+      "wff_official_photos_mask.xml",
+      "wff_official_photos_multi.xml",
+    )
+
+    val bmp = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+    val pngOut = java.io.ByteArrayOutputStream()
+    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, pngOut)
+    val pngBytes = pngOut.toByteArray()
+    bmp.recycle()
+
+    val importedIds = mutableListOf<String>()
+    try {
+      for (fileName in sampleFiles) {
+        val xmlBytes = javaClass.classLoader!!.getResourceAsStream(fileName)!!.readBytes()
+        val zipOut = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(zipOut).use { zos ->
+          zos.putNextEntry(java.util.zip.ZipEntry("res/raw/watchface.xml"))
+          zos.write(xmlBytes)
+          zos.closeEntry()
+          for (res in listOf(
+            "res/drawable/analog_hour_hand.png",
+            "res/drawable/analog_minute_hand.png",
+            "res/drawable/analog_second_hand.png",
+            "res/drawable/photo_default_bg.png",
+            "res/drawable/photo_circle_mask.png",
+            "res/drawable/photo_default_album.png",
+          )) {
+            zos.putNextEntry(java.util.zip.ZipEntry(res))
+            zos.write(pngBytes)
+            zos.closeEntry()
+          }
+        }
+        val res = com.example.faces.wff.WffStorageManager.importFromStream(
+          context, fileName.replace(".xml", ".apk"), java.io.ByteArrayInputStream(zipOut.toByteArray()),
+        )
+        assertTrue("Expected success importing $fileName, got $res", res is com.example.faces.wff.WffImportResult.Success)
+        val entry = (res as com.example.faces.wff.WffImportResult.Success).entry
+        importedIds += entry.id
+        assertEquals("Expected 0 skipped items for $fileName, got ${entry.report.skippedItems}", 0, entry.report.skippedCount)
+        assertTrue("Score too low for $fileName: ${entry.report.scorePercent}", entry.report.scorePercent >= 90)
+      }
+
+      // Check Weather provenance flags NO_DATA and evaluates safely offline
+      val weatherFace = com.example.faces.wff.WffStorageManager.loadAll(context)
+        .first { it.face.name == "Weather Official" }.face
+      val weatherProv = com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(
+        weatherFace, com.example.core.CoreSingletons.sensorSource(context).diagnostics.value, emptyMap(),
+      )
+      assertTrue(weatherProv.any { it.source == "Weather" && it.origin == com.example.core.WffDataSourceOrigin.NO_DATA })
+      val weatherEvalCtx = com.example.faces.wff.WffEvalContext(FaceData())
+      assertFalse(com.example.faces.wff.WffExpression.evaluate(com.example.faces.wff.WffExpression.compile("[WEATHER.IS_AVAILABLE]"), weatherEvalCtx).asBoolean())
+      assertEquals("--", com.example.faces.wff.WffExpression.evaluate(com.example.faces.wff.WffExpression.compile("[WEATHER.CONDITION_NAME]"), weatherEvalCtx).asString())
+    } finally {
+      importedIds.forEach { com.example.faces.wff.WffStorageManager.deleteFace(context, it) }
+    }
   }
 
   private fun buildMinimalTestArsc(

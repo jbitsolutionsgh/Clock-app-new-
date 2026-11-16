@@ -103,7 +103,7 @@ object FacesChiplet {
     val faces by WatchFaceRegistry.facesFlow.collectAsStateWithLifecycle()
     val activeFace = remember(selectedId, faces) { WatchFaceRegistry.findById(selectedId) }
     val activeWffEntry = (activeFace as? com.example.faces.wff.WffFace)?.storedFace
-      ?.takeIf { it.face.userConfigs.isNotEmpty() }
+      ?.takeIf { com.example.faces.wff.WffFace.hasCustomizableOptions(it.face) }
     var showConfigSheet by remember { mutableStateOf(false) }
 
     BoxWithConstraints(

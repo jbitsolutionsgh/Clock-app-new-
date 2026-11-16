@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -18,11 +19,18 @@ internal sealed class WffImportResult {
   /** Import succeeded and persisted the watch face into private app storage. */
   data class Success(val entry: WffStoredFace) : WffImportResult()
 
+  /** Same watchface content hash was already imported; caller may replace or cancel. */
+  data class DuplicateFound(
+    val existingFace: WffStoredFace,
+    val stagedFile: File,
+    val sourceFileName: String,
+  ) : WffImportResult()
+
   /** Import failed with a clear human-readable explanation. */
   data class Error(val reason: String) : WffImportResult()
 }
 
-/** Persisted WFF watch face loaded from files/wff/<id>/ with resolved image & font files. */
+/** Persisted WFF watch face loaded from files/wff/<id>/ with resolved image, font & string files. */
 internal data class WffStoredFace(
   val id: String,
   val displayName: String,
@@ -34,17 +42,19 @@ internal data class WffStoredFace(
   val report: WffCompatibilityReport,
   val sourceFileName: String,
   val importedAtMs: Long,
+  val contentHash: String = "",
 )
 
 /**
- * Manages offline import, extraction, caching, loading, and deletion of WFF watch faces under
- * app-private storage (files/wff/<id>/). Never persists document URI permissions or executes APK code.
+ * Manages offline import, extraction, duplicate detection, caching, loading, and deletion of WFF
+ * watch faces under app-private storage (files/wff/<id>/). Never persists document URI permissions.
  */
 internal object WffStorageManager {
 
   private const val WFF_DIR_NAME = "wff"
   private const val WATCHFACE_XML_NAME = "watchface.xml"
   private const val META_JSON_NAME = "meta.json"
+  private const val STRINGS_JSON_NAME = "strings.json"
   private const val IMAGES_DIR_NAME = "images"
   private const val FONTS_DIR_NAME = "fonts"
   private const val MAX_ARCHIVE_BYTES = 64L * 1024L * 1024L
@@ -56,11 +66,15 @@ internal object WffStorageManager {
   private val fontExtensions = listOf(".ttf", ".otf", ".ttc")
 
   /** Imports a WFF .apk, .zip, or plain watchface.xml from [uri] without taking URI permissions. */
-  fun importFromUri(context: Context, uri: Uri): WffImportResult {
+  fun importFromUri(
+    context: Context,
+    uri: Uri,
+    replaceFaceId: String? = null,
+  ): WffImportResult {
     val fileName = resolveDisplayName(context, uri) ?: "imported_watchface"
     return runCatching {
       context.contentResolver.openInputStream(uri)?.use { stream ->
-        importFromStream(context, fileName, stream)
+        importFromStream(context, fileName, stream, replaceFaceId)
       } ?: WffImportResult.Error("Could not open the selected file.")
     }.getOrElse { err ->
       WffImportResult.Error("Import failed: ${err.message ?: err.javaClass.simpleName}")
@@ -72,32 +86,65 @@ internal object WffStorageManager {
     context: Context,
     sourceFileName: String,
     inputStream: InputStream,
+    replaceFaceId: String? = null,
   ): WffImportResult {
     val tempFile = File.createTempFile("wff_import_", ".tmp", context.cacheDir)
     return try {
       copyStreamWithLimit(inputStream, tempFile, MAX_ARCHIVE_BYTES)
         ?: return WffImportResult.Error("Selected file exceeds the 64 MB size limit.")
-
-      if (tempFile.length() < 4L) return WffImportResult.Error("Selected file is empty.")
-
-      val header = ByteArray(4)
-      tempFile.inputStream().use { it.read(header) }
-      if (WffXmlParser.isBinaryXml(header)) {
-        return WffImportResult.Error(
-          "Selected XML is compiled binary XML. Provide plain-text watchface.xml or a .apk/.zip package.",
-        )
-      }
-
-      val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
-        (header[2] == 0x03.toByte() || header[2] == 0x05.toByte())
-
-      if (isZip) importZipArchive(context, sourceFileName, tempFile)
-      else importStandaloneXml(context, sourceFileName, tempFile)
+      processTempImportFile(context, sourceFileName, tempFile, replaceFaceId)
     } catch (err: Exception) {
       WffImportResult.Error("Failed to read file: ${err.message ?: err.javaClass.simpleName}")
     } finally {
       tempFile.delete()
     }
+  }
+
+  /** Completes a duplicate replacement using the temporary [stagedFile] returned in [WffImportResult.DuplicateFound]. */
+  fun replaceImportedFace(
+    context: Context,
+    stagedFile: File,
+    sourceFileName: String,
+    targetFaceId: String,
+  ): WffImportResult {
+    return try {
+      if (!stagedFile.exists()) {
+        return WffImportResult.Error("Staged import file is no longer available.")
+      }
+      processTempImportFile(context, sourceFileName, stagedFile, replaceFaceId = targetFaceId)
+    } catch (err: Exception) {
+      WffImportResult.Error("Replace failed: ${err.message ?: err.javaClass.simpleName}")
+    } finally {
+      stagedFile.delete()
+    }
+  }
+
+  /** Deletes a staged duplicate import file if the user chooses Cancel. */
+  fun cancelStagedImport(stagedFile: File) {
+    runCatching { stagedFile.delete() }
+  }
+
+  private fun processTempImportFile(
+    context: Context,
+    sourceFileName: String,
+    tempFile: File,
+    replaceFaceId: String?,
+  ): WffImportResult {
+    if (tempFile.length() < 4L) return WffImportResult.Error("Selected file is empty.")
+
+    val header = ByteArray(4)
+    tempFile.inputStream().use { it.read(header) }
+    if (WffXmlParser.isBinaryXml(header)) {
+      return WffImportResult.Error(
+        "Selected XML is compiled binary XML. Provide plain-text watchface.xml or a .apk/.zip package.",
+      )
+    }
+
+    val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
+      (header[2] == 0x03.toByte() || header[2] == 0x05.toByte())
+
+    return if (isZip) importZipArchive(context, sourceFileName, tempFile, replaceFaceId)
+    else importStandaloneXml(context, sourceFileName, tempFile, replaceFaceId)
   }
 
   /** Loads all previously imported WFF watch faces from app-private files/wff storage. */
@@ -116,12 +163,14 @@ internal object WffStorageManager {
       val faceId = meta?.optString("id")?.ifBlank { null } ?: dir.name
       val sourceFileName = meta?.optString("sourceFileName")?.ifBlank { null } ?: dir.name
       val importedAtMs = meta?.optLong("importedAtMs") ?: dir.lastModified()
+      val contentHash = meta?.optString("contentHash").orEmpty()
       val savedResourceMap = readStringMap(meta?.optJSONObject("resourceFileMap"))
       val savedFontMap = readStringMap(meta?.optJSONObject("fontFileMap"))
       val savedMissing = readStringList(meta?.optJSONArray("missingResources"))
+      val stringMap = readStringsFile(File(dir, STRINGS_JSON_NAME))
 
       val xmlText = runCatching { xmlFile.readText(StandardCharsets.UTF_8) }.getOrNull() ?: continue
-      val parsed = WffXmlParser.parse(xmlText, faceId, baseNameWithoutExt(sourceFileName))
+      val parsed = WffXmlParser.parse(xmlText, faceId, baseNameWithoutExt(sourceFileName), stringMap)
       if (parsed !is WffParseResult.Success) continue
 
       val imagesDir = File(dir, IMAGES_DIR_NAME)
@@ -139,6 +188,7 @@ internal object WffStorageManager {
         report = mergedReport,
         sourceFileName = sourceFileName,
         importedAtMs = importedAtMs,
+        contentHash = contentHash,
       )
     }
     return loaded.sortedBy { it.importedAtMs }
@@ -155,14 +205,25 @@ internal object WffStorageManager {
     context: Context,
     sourceFileName: String,
     xmlTempFile: File,
+    replaceFaceId: String?,
   ): WffImportResult {
     if (xmlTempFile.length() > MAX_XML_BYTES) return WffImportResult.Error("watchface.xml exceeds 2 MB limit.")
     val rawBytes = xmlTempFile.readBytes()
     if (WffXmlParser.isBinaryXml(rawBytes)) {
       return WffImportResult.Error("watchface.xml is compiled binary XML, which is not supported.")
     }
+
+    val contentHash = computeXmlHash(rawBytes)
+    if (replaceFaceId == null) {
+      findDuplicate(context, contentHash)?.let { existing ->
+        val staged = File(context.cacheDir, "wff_stage_${System.currentTimeMillis()}.tmp")
+        xmlTempFile.copyTo(staged, overwrite = true)
+        return WffImportResult.DuplicateFound(existing, staged, sourceFileName)
+      }
+    }
+
     val xmlText = String(rawBytes, StandardCharsets.UTF_8)
-    val id = generateFaceId(context, sourceFileName)
+    val id = replaceFaceId ?: generateFaceId(context, sourceFileName)
     val parsed = WffXmlParser.parse(xmlText, id, baseNameWithoutExt(sourceFileName))
     if (parsed is WffParseResult.Error) return WffImportResult.Error(parsed.reason)
     val parsedFace = (parsed as WffParseResult.Success).face
@@ -172,8 +233,15 @@ internal object WffStorageManager {
     val finalFace = parsedFace.copy(report = mergedReport)
 
     val faceDir = File(wffRootDir(context), id).apply { mkdirs() }
-    val imagesDir = File(faceDir, IMAGES_DIR_NAME).apply { mkdirs() }
-    val fontsDir = File(faceDir, FONTS_DIR_NAME).apply { mkdirs() }
+    val imagesDir = File(faceDir, IMAGES_DIR_NAME).apply {
+      if (replaceFaceId != null && exists()) listFiles()?.forEach { it.delete() }
+      mkdirs()
+    }
+    val fontsDir = File(faceDir, FONTS_DIR_NAME).apply {
+      if (replaceFaceId != null && exists()) listFiles()?.forEach { it.delete() }
+      mkdirs()
+    }
+    File(faceDir, STRINGS_JSON_NAME).delete()
     File(faceDir, WATCHFACE_XML_NAME).writeText(xmlText, StandardCharsets.UTF_8)
 
     val nowMs = System.currentTimeMillis()
@@ -182,6 +250,7 @@ internal object WffStorageManager {
       id = id,
       sourceFileName = sourceFileName,
       importedAtMs = nowMs,
+      contentHash = contentHash,
       resourceFileMap = emptyMap(),
       fontFileMap = emptyMap(),
       missingResources = missing,
@@ -199,6 +268,7 @@ internal object WffStorageManager {
         report = mergedReport,
         sourceFileName = sourceFileName,
         importedAtMs = nowMs,
+        contentHash = contentHash,
       ),
     )
   }
@@ -207,6 +277,7 @@ internal object WffStorageManager {
     context: Context,
     sourceFileName: String,
     zipTempFile: File,
+    replaceFaceId: String?,
   ): WffImportResult {
     ZipFile(zipTempFile).use { zip ->
       val allEntries = zip.entries().asSequence()
@@ -231,36 +302,53 @@ internal object WffStorageManager {
         )
       }
 
+      val entryByLowerPath = allEntries.associateBy { it.name.lowercase(Locale.US) }
+      val arscBytes = entryByLowerPath["resources.arsc"]?.let { arscEntry ->
+        if (arscEntry.size <= MAX_ARSC_BYTES) {
+          zip.getInputStream(arscEntry).use { readBytesWithLimit(it, MAX_ARSC_BYTES) }
+        } else null
+      }
+
+      val contentHash = computeArchiveHash(xmlBytes, allEntries, arscBytes)
+      if (replaceFaceId == null) {
+        findDuplicate(context, contentHash)?.let { existing ->
+          val staged = File(context.cacheDir, "wff_stage_${System.currentTimeMillis()}.tmp")
+          zipTempFile.copyTo(staged, overwrite = true)
+          return WffImportResult.DuplicateFound(existing, staged, sourceFileName)
+        }
+      }
+
+      val stringMap = WffStringResources.loadFromArchive(zip, allEntries, arscBytes)
       val xmlText = String(xmlBytes, StandardCharsets.UTF_8)
-      val id = generateFaceId(context, sourceFileName)
-      val parsed = WffXmlParser.parse(xmlText, id, baseNameWithoutExt(sourceFileName))
+      val id = replaceFaceId ?: generateFaceId(context, sourceFileName)
+      val parsed = WffXmlParser.parse(xmlText, id, baseNameWithoutExt(sourceFileName), stringMap)
       if (parsed is WffParseResult.Error) return WffImportResult.Error(parsed.reason)
       val parsedFace = (parsed as WffParseResult.Success).face
 
-      val entryByLowerPath = allEntries.associateBy { it.name.lowercase(Locale.US) }
-      var arscMap: Map<String, String>? = null
-      fun resolveArsc(): Map<String, String> {
-        arscMap?.let { return it }
-        val arscEntry = entryByLowerPath["resources.arsc"]
-        val loaded = if (arscEntry != null && arscEntry.size <= MAX_ARSC_BYTES) {
-          zip.getInputStream(arscEntry).use { readBytesWithLimit(it, MAX_ARSC_BYTES) }
-            ?.let { ArscResourceTableReader.readDrawableResourcePaths(it) }
-            ?: emptyMap()
-        } else emptyMap()
-        arscMap = loaded
+      var arscDrawableMap: Map<String, String>? = null
+      fun resolveArscDrawables(): Map<String, String> {
+        arscDrawableMap?.let { return it }
+        val loaded = arscBytes?.let { ArscResourceTableReader.readDrawableResourcePaths(it) } ?: emptyMap()
+        arscDrawableMap = loaded
         return loaded
       }
 
       val faceDir = File(wffRootDir(context), id).apply { mkdirs() }
-      val imagesDir = File(faceDir, IMAGES_DIR_NAME).apply { mkdirs() }
-      val fontsDir = File(faceDir, FONTS_DIR_NAME).apply { mkdirs() }
+      val imagesDir = File(faceDir, IMAGES_DIR_NAME).apply {
+        if (replaceFaceId != null && exists()) listFiles()?.forEach { it.delete() }
+        mkdirs()
+      }
+      val fontsDir = File(faceDir, FONTS_DIR_NAME).apply {
+        if (replaceFaceId != null && exists()) listFiles()?.forEach { it.delete() }
+        mkdirs()
+      }
 
       val resourceFileMap = LinkedHashMap<String, String>()
       val unresolved = mutableListOf<String>()
 
       for (logicalRes in parsedFace.referencedResources) {
         val cleanKey = cleanResourceKey(logicalRes)
-        val matched = findEntryByKey(allEntries, entryByLowerPath, cleanKey, logicalRes, rasterExtensions, ::resolveArsc)
+        val matched = findEntryByKey(allEntries, entryByLowerPath, cleanKey, logicalRes, rasterExtensions, ::resolveArscDrawables)
         if (matched != null) {
           val ext = extensionOf(matched.name, ".png")
           val outName = "${sanitizeSlug(cleanKey)}_${resourceFileMap.size}$ext"
@@ -276,7 +364,7 @@ internal object WffStorageManager {
       val fontFileMap = LinkedHashMap<String, String>()
       for (fontName in parsedFace.referencedFonts) {
         val cleanKey = cleanResourceKey(fontName).removePrefix("@font/")
-        val matched = findEntryByKey(allEntries, entryByLowerPath, cleanKey, fontName, fontExtensions, ::resolveArsc)
+        val matched = findEntryByKey(allEntries, entryByLowerPath, cleanKey, fontName, fontExtensions, ::resolveArscDrawables)
         if (matched != null) {
           val ext = extensionOf(matched.name, ".ttf")
           val outName = "${sanitizeSlug(cleanKey)}_${fontFileMap.size}$ext"
@@ -290,6 +378,7 @@ internal object WffStorageManager {
       val mergedReport = appendMissingToReport(parsedFace.report, unresolved)
       val finalFace = parsedFace.copy(report = mergedReport)
       File(faceDir, WATCHFACE_XML_NAME).writeText(xmlText, StandardCharsets.UTF_8)
+      writeStringsFile(File(faceDir, STRINGS_JSON_NAME), stringMap)
 
       val nowMs = System.currentTimeMillis()
       writeMetaJson(
@@ -297,6 +386,7 @@ internal object WffStorageManager {
         id = id,
         sourceFileName = sourceFileName,
         importedAtMs = nowMs,
+        contentHash = contentHash,
         resourceFileMap = resourceFileMap,
         fontFileMap = fontFileMap,
         missingResources = unresolved,
@@ -314,9 +404,40 @@ internal object WffStorageManager {
           report = mergedReport,
           sourceFileName = sourceFileName,
           importedAtMs = nowMs,
+          contentHash = contentHash,
         ),
       )
     }
+  }
+
+  private fun findDuplicate(context: Context, contentHash: String): WffStoredFace? {
+    if (contentHash.isEmpty()) return null
+    return loadAll(context).firstOrNull { it.contentHash == contentHash }
+  }
+
+  private fun computeXmlHash(xmlBytes: ByteArray): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    md.update(xmlBytes)
+    return md.digest().joinToString("") { "%02x".format(it) }
+  }
+
+  private fun computeArchiveHash(
+    xmlBytes: ByteArray,
+    allEntries: List<ZipEntry>,
+    arscBytes: ByteArray?,
+  ): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    md.update(xmlBytes)
+    if (arscBytes != null) {
+      md.update(arscBytes)
+    }
+    allEntries
+      .filter { it.name.startsWith("res/", ignoreCase = true) || it.name.startsWith("assets/", ignoreCase = true) }
+      .sortedBy { it.name }
+      .forEach { entry ->
+        md.update("${entry.name}:${entry.size}:${entry.crc};".toByteArray(StandardCharsets.UTF_8))
+      }
+    return md.digest().joinToString("") { "%02x".format(it) }
   }
 
   private fun appendMissingToReport(
@@ -422,6 +543,7 @@ internal object WffStorageManager {
     id: String,
     sourceFileName: String,
     importedAtMs: Long,
+    contentHash: String,
     resourceFileMap: Map<String, String>,
     fontFileMap: Map<String, String>,
     missingResources: List<String>,
@@ -430,11 +552,27 @@ internal object WffStorageManager {
       put("id", id)
       put("sourceFileName", sourceFileName)
       put("importedAtMs", importedAtMs)
+      put("contentHash", contentHash)
       put("resourceFileMap", JSONObject(resourceFileMap))
       put("fontFileMap", JSONObject(fontFileMap))
       put("missingResources", JSONArray(missingResources))
     }
     file.writeText(root.toString(2), StandardCharsets.UTF_8)
+  }
+
+  private fun writeStringsFile(file: File, strings: Map<String, String>) {
+    if (strings.isEmpty()) {
+      file.delete()
+    } else {
+      file.writeText(JSONObject(strings).toString(), StandardCharsets.UTF_8)
+    }
+  }
+
+  private fun readStringsFile(file: File): Map<String, String> {
+    if (!file.exists()) return emptyMap()
+    return runCatching {
+      readStringMap(JSONObject(file.readText(StandardCharsets.UTF_8)))
+    }.getOrDefault(emptyMap())
   }
 
   private fun readStringMap(obj: JSONObject?): Map<String, String> {

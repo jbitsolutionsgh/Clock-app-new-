@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Complications Official" />
+  <Scene backgroundColor="#FF050810">
+    <DigitalClock x="75" y="70" width="300" height="90">
+      <TimeText format="HH:mm" hourFormat="SYNC_TO_DEVICE" align="CENTER" x="0" y="0" width="300" height="90">
+        <Font family="SYNC_TO_DEVICE" size="64" color="#FFFFFFFF" />
+      </TimeText>
+    </DigitalClock>
+
+    <ComplicationSlot slotId="1" displayName="Left Dial" x="50" y="210" width="150" height="150" supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+      <DefaultProviderPolicy defaultSystemProvider="STEP_COUNT" defaultSystemProviderType="RANGED_VALUE" />
+      <BoundingOval x="0" y="0" width="150" height="150" />
+      <Complication type="RANGED_VALUE">
+        <PartDraw x="5" y="5" width="140" height="140">
+          <Arc centerX="70" centerY="70" width="130" height="130" startAngle="0" sweepAngle="360">
+            <Transform target="sweepAngle" value="360 * clamp(([COMPLICATION.RANGED_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / max(1, [COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]), 0, 1)" />
+            <Stroke color="#FF10B981" thickness="8" cap="ROUND" />
+          </Arc>
+        </PartDraw>
+        <PartText x="15" y="45" width="120" height="40">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="22" color="#FFFFFFFF">
+              <Template>%s</Template>
+              <Parameter expression="[COMPLICATION.TEXT]" />
+            </Font>
+          </Text>
+        </PartText>
+        <PartText x="15" y="88" width="120" height="28">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="14" color="#FF94A3B8">
+              <Template>%s</Template>
+              <Parameter expression="[COMPLICATION.TITLE]" />
+            </Font>
+          </Text>
+        </PartText>
+      </Complication>
+      <Complication type="SHORT_TEXT">
+        <PartImage x="55" y="22" width="40" height="40" tintColor="#FFFFFFFF">
+          <Image resource="[COMPLICATION.MONOCHROMATIC_IMAGE]" />
+        </PartImage>
+        <PartText x="10" y="74" width="130" height="36">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="20" color="#FFFFFFFF">
+              <Template>%s</Template>
+              <Parameter expression="[COMPLICATION.TEXT]" />
+            </Font>
+          </Text>
+        </PartText>
+      </Complication>
+    </ComplicationSlot>
+
+    <ComplicationSlot slotId="2" displayName="Right Pill" x="240" y="230" width="160" height="110" supportedTypes="LONG_TEXT SHORT_TEXT EMPTY" isCustomizable="TRUE">
+      <DefaultProviderPolicy defaultSystemProvider="NEXT_EVENT" defaultSystemProviderType="LONG_TEXT" />
+      <BoundingRoundBox x="0" y="0" width="160" height="110" cornerRadiusX="24" cornerRadiusY="24" />
+      <Complication type="LONG_TEXT">
+        <PartText x="12" y="18" width="136" height="36">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="16" weight="BOLD" color="#FF60A5FA">
+              <Template>%s</Template>
+              <Parameter expression="[COMPLICATION.TITLE]" />
+            </Font>
+          </Text>
+        </PartText>
+        <PartText x="12" y="56" width="136" height="36">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="15" color="#FFE2E8F0">
+              <Template>%s</Template>
+              <Parameter expression="[COMPLICATION.TEXT]" />
+            </Font>
+          </Text>
+        </PartText>
+      </Complication>
+    </ComplicationSlot>
+  </Scene>
+</WatchFace>

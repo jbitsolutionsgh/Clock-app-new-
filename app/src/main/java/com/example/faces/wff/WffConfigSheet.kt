@@ -1,5 +1,8 @@
 package com.example.faces.wff
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,19 +23,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,8 +52,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.CoreSingletons
 
 /**
- * Material 3 ModalBottomSheet displaying ColorConfiguration swatches, ListConfiguration choices,
- * and BooleanConfiguration switches for an imported WFF watch face, saving live per face.
+ * Material 3 ModalBottomSheet displaying Flavors presets, Color/List/Boolean configurations,
+ * zero-permission Android Photo Picker controls for PhotosConfiguration, and ComplicationSlot
+ * AuraClock provider pickers — all saved offline per face.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -58,6 +66,43 @@ internal fun WffConfigSheet(
   val prefs = remember { CoreSingletons.prefs(context) }
   val allConfigs by prefs.wffFaceConfigs.collectAsStateWithLifecycle()
   val saved = allConfigs[entry.id].orEmpty()
+
+  val allCompProviders by prefs.wffComplicationProviders.collectAsStateWithLifecycle()
+  val savedComps = allCompProviders[entry.id].orEmpty()
+
+  val allFlavors by prefs.wffSelectedFlavors.collectAsStateWithLifecycle()
+  val activeFlavorId = allFlavors[entry.id] ?: entry.face.flavors?.defaultFlavorId
+
+  val allPhotos by prefs.wffFacePhotos.collectAsStateWithLifecycle()
+  val savedPhotos = allPhotos[entry.id].orEmpty()
+
+  val slots = remember(entry.id) {
+    WffFace.collectComplicationSlots(entry.face).filter { it.isCustomizable }
+  }
+  var activePhotoTargetId by remember { mutableStateOf<String?>(null) }
+
+  val singlePhotoLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.PickVisualMedia(),
+  ) { uri ->
+    val targetId = activePhotoTargetId
+    if (uri != null && targetId != null) {
+      val imported = WffPhotoManager.importPhotos(context, entry.id, targetId, listOf(uri))
+      prefs.setWffPhotos(entry.id, targetId, imported)
+    }
+    activePhotoTargetId = null
+  }
+
+  val multiPhotoLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.PickMultipleVisualMedia(10),
+  ) { uris ->
+    val targetId = activePhotoTargetId
+    if (uris.isNotEmpty() && targetId != null) {
+      val imported = WffPhotoManager.importPhotos(context, entry.id, targetId, uris)
+      prefs.setWffPhotos(entry.id, targetId, imported)
+    }
+    activePhotoTargetId = null
+  }
+
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
   ModalBottomSheet(
@@ -87,7 +132,7 @@ internal fun WffConfigSheet(
             color = Color.White,
           )
           Text(
-            text = "${entry.face.userConfigs.size} watch face options • Saved offline per face",
+            text = "Saved offline per watch face",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -100,6 +145,47 @@ internal fun WffConfigSheet(
         }
       }
 
+      // 1. Flavors (Preset style bundles)
+      entry.face.flavors?.let { flavorSet ->
+        if (flavorSet.flavors.isNotEmpty()) {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = "Presets (Flavors)",
+              style = MaterialTheme.typography.titleMedium,
+              color = Color.White,
+            )
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              flavorSet.flavors.forEach { flavor ->
+                val selected = activeFlavorId == flavor.id
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    flavor.configChoices.forEach { ch ->
+                      prefs.setWffConfigValue(entry.id, ch.configId, ch.optionId)
+                    }
+                    flavor.complicationChoices.forEach { ch ->
+                      val slot = slots.firstOrNull { it.slotId == ch.slotId }
+                      val resolvedProv = AuraComplicationProvider.fromPolicy(
+                        WffDefaultProviderPolicy(ch.defaultSystemProvider, ch.defaultSystemProviderType),
+                        slot?.supportedTypes ?: listOf("SHORT_TEXT"),
+                      )
+                      prefs.setWffComplicationProvider(entry.id, ch.slotId, resolvedProv.id)
+                    }
+                    prefs.setWffSelectedFlavor(entry.id, flavor.id)
+                  },
+                  label = { Text(flavor.displayName) },
+                  modifier = Modifier.testTag("wff_flavor_${flavor.id}"),
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // 2. UserConfigurations (Color, List, Boolean, Photos)
       entry.face.userConfigs.forEach { cfg ->
         val currentVal = saved[cfg.id] ?: cfg.defaultValue
         when (cfg) {
@@ -210,6 +296,89 @@ internal fun WffConfigSheet(
                 },
                 modifier = Modifier.testTag("wff_cfg_bool_${cfg.id}"),
               )
+            }
+          }
+
+          is WffUserConfig.PhotosConfig -> {
+            val pickedFiles = savedPhotos[cfg.id].orEmpty()
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              Text(
+                text = cfg.displayName,
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+              )
+              Text(
+                text = if (pickedFiles.isEmpty()) "Using default watch face image"
+                else "${pickedFiles.size} custom photo(s) selected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                OutlinedButton(
+                  onClick = {
+                    activePhotoTargetId = cfg.id
+                    val req = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    if (cfg.photosType == WffPhotosType.SINGLE) {
+                      singlePhotoLauncher.launch(req)
+                    } else {
+                      multiPhotoLauncher.launch(req)
+                    }
+                  },
+                  modifier = Modifier.testTag("wff_cfg_photos_pick_${cfg.id}"),
+                ) {
+                  Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(if (cfg.photosType == WffPhotosType.SINGLE) "Choose photo" else "Choose photos")
+                }
+                if (pickedFiles.isNotEmpty()) {
+                  TextButton(
+                    onClick = {
+                      WffPhotoManager.clearConfigPhotos(context, entry.id, cfg.id)
+                      prefs.setWffPhotos(entry.id, cfg.id, emptyList())
+                    },
+                    modifier = Modifier.testTag("wff_cfg_photos_clear_${cfg.id}"),
+                  ) {
+                    Text("Reset")
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 3. ComplicationSlot assignments (offline AuraClock data sources)
+      if (slots.isNotEmpty()) {
+        Text(
+          text = "Complication Slots",
+          style = MaterialTheme.typography.titleMedium,
+          color = Color.White,
+        )
+        slots.forEachIndexed { idx, slot ->
+          val activeProv = AuraComplicationProvider.fromId(savedComps[slot.slotId])
+            ?: AuraComplicationProvider.fromPolicy(slot.defaultProviderPolicy, slot.supportedTypes, idx)
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+              text = "${slot.displayName} (${activeProv.label})",
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              AuraComplicationProvider.entries.forEach { provider ->
+                FilterChip(
+                  selected = provider == activeProv,
+                  onClick = { prefs.setWffComplicationProvider(entry.id, slot.slotId, provider.id) },
+                  label = { Text(provider.label) },
+                  modifier = Modifier.testTag("wff_comp_${slot.slotId}_${provider.id}"),
+                )
+              }
             }
           }
         }

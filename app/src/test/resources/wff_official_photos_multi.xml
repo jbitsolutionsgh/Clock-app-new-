@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Photos Multi Official" />
+  <UserConfigurations>
+    <PhotosConfiguration id="album_photos" displayName="Album" configType="MULTIPLE" maxNumberOfPhotos="8" />
+  </UserConfigurations>
+  <Scene backgroundColor="#FF000000">
+    <PartImage x="0" y="0" width="450" height="450">
+      <Photos source="[CONFIGURATION.album_photos]" defaultImageResource="photo_default_album" change="TAP ON_VISIBLE" changeAfterEvery="1" />
+    </PartImage>
+    <DigitalClock x="45" y="185" width="360" height="80">
+      <TimeText format="hh:mm" hourFormat="12" align="CENTER" x="0" y="0" width="360" height="80">
+        <Font family="SYNC_TO_DEVICE" size="60" color="#FFFFFFFF" />
+      </TimeText>
+    </DigitalClock>
+  </Scene>
+</WatchFace>

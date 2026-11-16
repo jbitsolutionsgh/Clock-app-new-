@@ -149,9 +149,12 @@ object EarbudChiplet {
     val faceDiagProvider = remember { CoreSingletons.faceDiagnosticsProvider }
     val faceDiag by (faceDiagProvider?.diagnostics
       ?: remember { MutableStateFlow(FaceEngineDiagnostics()) }).collectAsStateWithLifecycle()
+    val sensorSource = remember { CoreSingletons.sensorSource(context) }
+    val sensorDiag by sensorSource.diagnostics.collectAsStateWithLifecycle()
 
-    LaunchedEffect(standByProvider) {
+    LaunchedEffect(standByProvider, sensorSource) {
       standByProvider?.refreshNow()
+      sensorSource.refreshDiagnostics()
     }
 
     Column(
@@ -300,6 +303,37 @@ object EarbudChiplet {
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier
           .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+          .testTag("diag_phone_sensors_card"),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Phone Sensors (On-Demand)",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          SensorStatusLine("Steps (Counter)", sensorDiag.steps, "diag_sensor_steps")
+          SensorStatusLine("Heart Rate", sensorDiag.heartRate, "diag_sensor_heart_rate")
+          SensorStatusLine("Ambient Light", sensorDiag.light, "diag_sensor_light")
+          SensorStatusLine("Barometer (Pressure)", sensorDiag.pressure, "diag_sensor_pressure")
+          SensorStatusLine("Accelerometer", sensorDiag.accelerometer, "diag_sensor_accelerometer")
+          Text(
+            text = "Active listeners right now: ${sensorDiag.activeListenersCount}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_sensor_active_count"),
+          )
+        }
+      }
+
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
           .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
       ) {
         Column(
@@ -373,6 +407,18 @@ object EarbudChiplet {
               color = if (wff.skippedCount == 0 && wff.partlyDrawnCount == 0) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
               modifier = Modifier.testTag("diag_wff_compatibility_${wff.id}"),
             )
+            wff.dataSources.forEach { ds ->
+              val color = when (ds.origin) {
+                com.example.core.WffDataSourceOrigin.REAL_SENSOR -> Color(0xFF10B981)
+                com.example.core.WffDataSourceOrigin.AURACLOCK_DATA -> MaterialTheme.colorScheme.primary
+                com.example.core.WffDataSourceOrigin.NO_DATA -> Color(0xFFF59E0B)
+              }
+              Text(
+                text = "   • ${ds.source}: ${ds.origin.label} (${ds.detail})",
+                style = MaterialTheme.typography.bodySmall,
+                color = color,
+              )
+            }
             wff.partlyDrawnItems.forEach { partly ->
               Text(
                 text = "   ~ ${partly.element}: ${partly.reason}",
@@ -475,5 +521,26 @@ private fun DiagnosticCard(
         tint = if (isHealthy) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
       )
     }
+  }
+}
+
+@Composable
+private fun SensorStatusLine(
+  label: String,
+  status: com.example.core.SensorAvailability,
+  tag: String,
+) {
+  val statusColor = when (status) {
+    com.example.core.SensorAvailability.AVAILABLE -> Color(0xFF10B981)
+    com.example.core.SensorAvailability.PERMISSION_NEEDED -> Color(0xFFF59E0B)
+    com.example.core.SensorAvailability.NO_HARDWARE -> MaterialTheme.colorScheme.onSurfaceVariant
+  }
+  Row(
+    modifier = Modifier.fillMaxWidth().testTag(tag),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(label, style = MaterialTheme.typography.bodyMedium, color = Color.White)
+    Text(status.label, style = MaterialTheme.typography.bodyMedium, color = statusColor)
   }
 }

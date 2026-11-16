@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="CLOCK_TYPE" value="DIGITAL" />
+  <Metadata key="title" value="Simple Digital Official" />
+  <UserConfigurations>
+    <ColorConfiguration id="theme_color" displayName="Theme Color" defaultValue="blue">
+      <ColorOption id="blue" displayName="Blue" colors="#FF3B82F6 #FF1E3A8A" />
+      <ColorOption id="green" displayName="Green" colors="#FF10B981 #FF064E3B" />
+    </ColorConfiguration>
+  </UserConfigurations>
+  <Scene backgroundColor="#FF000000">
+    <DigitalClock x="45" y="140" width="360" height="120">
+      <TimeText format="hh:mm" hourFormat="SYNC_TO_DEVICE" align="CENTER" x="0" y="0" width="360" height="90">
+        <Font family="SYNC_TO_DEVICE" size="72" weight="BOLD" color="[CONFIGURATION.theme_color.0]" />
+      </TimeText>
+      <TimeText format="a" hourFormat="12" align="CENTER" x="0" y="88" width="360" height="32">
+        <Font family="SYNC_TO_DEVICE" size="22" color="#FFCBD5E1" />
+      </TimeText>
+    </DigitalClock>
+    <PartText x="45" y="290" width="360" height="40">
+      <Text align="CENTER">
+        <Font family="SYNC_TO_DEVICE" size="22" color="#FF94A3B8">
+          <Template>%s %d</Template>
+          <Parameter expression="[DAY_OF_WEEK_S]" />
+          <Parameter expression="[DAY]" />
+        </Font>
+      </Text>
+    </PartText>
+  </Scene>
+</WatchFace>

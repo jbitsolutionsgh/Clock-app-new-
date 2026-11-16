@@ -95,6 +95,12 @@ class AuraPrefs(context: Context) {
   private val _timerGoFullScreenOnStart = MutableStateFlow(prefs.getBoolean(KEY_TIMER_FULLSCREEN_ON_START, false))
   val timerGoFullScreenOnStart: StateFlow<Boolean> = _timerGoFullScreenOnStart.asStateFlow()
 
+  private val _stepGoal = MutableStateFlow(prefs.getInt(KEY_STEP_GOAL, 10_000).coerceIn(1_000, 100_000))
+  val stepGoal: StateFlow<Int> = _stepGoal.asStateFlow()
+
+  private val _lastDailySteps = MutableStateFlow(prefs.getInt(KEY_STEP_LAST_DAILY, 0).coerceAtLeast(0))
+  val lastDailySteps: StateFlow<Int> = _lastDailySteps.asStateFlow()
+
   private fun loadThemeColor(): AuraThemeColor =
     AuraThemeColor.fromId(prefs.getString(KEY_THEME_COLOR, AuraThemeColor.COBALT.id))
 
@@ -290,22 +296,68 @@ class AuraPrefs(context: Context) {
     _timerGoFullScreenOnStart.value = enabled
   }
 
+  /** Reads saved (dayKey, bootCumulativeBaseline) for daily step computation. */
+  fun readStepBaseline(): Pair<Int, Float> =
+    prefs.getInt(KEY_STEP_BASELINE_DAY, -1) to prefs.getFloat(KEY_STEP_BASELINE_VAL, -1f)
+
+  /** Persists updated daily step baseline and current daily step total. */
+  fun saveStepState(dayKey: Int, baseline: Float, dailySteps: Int) {
+    prefs.edit()
+      .putInt(KEY_STEP_BASELINE_DAY, dayKey)
+      .putFloat(KEY_STEP_BASELINE_VAL, baseline)
+      .putInt(KEY_STEP_LAST_DAILY, dailySteps.coerceAtLeast(0))
+      .apply()
+    _lastDailySteps.value = dailySteps.coerceAtLeast(0)
+  }
+
   private val _wffFaceConfigs = MutableStateFlow(loadAllWffConfigs())
   val wffFaceConfigs: StateFlow<Map<String, Map<String, String>>> = _wffFaceConfigs.asStateFlow()
 
-  private fun loadAllWffConfigs(): Map<String, Map<String, String>> {
+  private val _wffComplicationProviders = MutableStateFlow(loadPrefixedTwoPartMap(KEY_WFF_COMP_PREFIX))
+  val wffComplicationProviders: StateFlow<Map<String, Map<String, String>>> = _wffComplicationProviders.asStateFlow()
+
+  private val _wffSelectedFlavors = MutableStateFlow(loadPrefixedOnePartMap(KEY_WFF_FLAVOR_PREFIX))
+  val wffSelectedFlavors: StateFlow<Map<String, String>> = _wffSelectedFlavors.asStateFlow()
+
+  private val _wffFacePhotos = MutableStateFlow(loadAllWffPhotos())
+  val wffFacePhotos: StateFlow<Map<String, Map<String, List<String>>>> = _wffFacePhotos.asStateFlow()
+
+  private fun loadAllWffConfigs(): Map<String, Map<String, String>> =
+    loadPrefixedTwoPartMap(KEY_WFF_CONFIG_PREFIX)
+
+  private fun loadPrefixedTwoPartMap(keyPrefix: String): Map<String, Map<String, String>> {
     val result = LinkedHashMap<String, LinkedHashMap<String, String>>()
     for ((rawKey, rawVal) in prefs.all) {
-      if (!rawKey.startsWith(KEY_WFF_CONFIG_PREFIX)) continue
-      val remainder = rawKey.removePrefix(KEY_WFF_CONFIG_PREFIX)
+      if (!rawKey.startsWith(keyPrefix)) continue
+      val remainder = rawKey.removePrefix(keyPrefix)
       val sep = remainder.indexOf("::")
       if (sep <= 0) continue
       val faceId = remainder.substring(0, sep)
-      val configId = remainder.substring(sep + 2)
+      val subId = remainder.substring(sep + 2)
       val value = rawVal as? String ?: continue
-      result.getOrPut(faceId) { LinkedHashMap() }[configId] = value
+      result.getOrPut(faceId) { LinkedHashMap() }[subId] = value
     }
     return result
+  }
+
+  private fun loadPrefixedOnePartMap(keyPrefix: String): Map<String, String> {
+    val result = LinkedHashMap<String, String>()
+    for ((rawKey, rawVal) in prefs.all) {
+      if (!rawKey.startsWith(keyPrefix)) continue
+      val faceId = rawKey.removePrefix(keyPrefix)
+      val value = rawVal as? String ?: continue
+      result[faceId] = value
+    }
+    return result
+  }
+
+  private fun loadAllWffPhotos(): Map<String, Map<String, List<String>>> {
+    val rawMap = loadPrefixedTwoPartMap(KEY_WFF_PHOTOS_PREFIX)
+    return rawMap.mapValues { (_, configs) ->
+      configs.mapValues { (_, joined) ->
+        joined.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+      }
+    }
   }
 
   /** Saves a single UserConfiguration choice for an imported WFF watch face. */
@@ -322,22 +374,64 @@ class AuraPrefs(context: Context) {
   fun getWffFaceConfig(faceId: String): Map<String, String> =
     _wffFaceConfigs.value[faceId].orEmpty()
 
-  /** Removes all saved UserConfiguration choices when an imported WFF watch face is deleted. */
+  /** Saves the chosen AuraClock provider ID for a ComplicationSlot on [faceId]. */
+  fun setWffComplicationProvider(faceId: String, slotId: String, providerId: String) {
+    prefs.edit().putString("$KEY_WFF_COMP_PREFIX$faceId::$slotId", providerId).apply()
+    val updated = _wffComplicationProviders.value.toMutableMap()
+    val faceMap = updated[faceId]?.toMutableMap() ?: LinkedHashMap()
+    faceMap[slotId] = providerId
+    updated[faceId] = faceMap
+    _wffComplicationProviders.value = updated
+  }
+
+  /** Returns saved ComplicationSlot provider IDs keyed by slotId for [faceId]. */
+  fun getWffComplicationProviders(faceId: String): Map<String, String> =
+    _wffComplicationProviders.value[faceId].orEmpty()
+
+  /** Persists the currently active Flavor preset ID for [faceId]. */
+  fun setWffSelectedFlavor(faceId: String, flavorId: String) {
+    prefs.edit().putString("$KEY_WFF_FLAVOR_PREFIX$faceId", flavorId).apply()
+    val updated = _wffSelectedFlavors.value.toMutableMap()
+    updated[faceId] = flavorId
+    _wffSelectedFlavors.value = updated
+  }
+
+  /** Saves ordered private photo filenames chosen for [configId] on [faceId]. */
+  fun setWffPhotos(faceId: String, configId: String, fileNames: List<String>) {
+    prefs.edit().putString("$KEY_WFF_PHOTOS_PREFIX$faceId::$configId", fileNames.joinToString("|")).apply()
+    val updated = _wffFacePhotos.value.toMutableMap()
+    val faceMap = updated[faceId]?.toMutableMap() ?: LinkedHashMap()
+    if (fileNames.isEmpty()) faceMap.remove(configId) else faceMap[configId] = fileNames
+    updated[faceId] = faceMap
+    _wffFacePhotos.value = updated
+  }
+
+  /** Returns saved private photo filenames per PhotosConfiguration ID for [faceId]. */
+  fun getWffPhotos(faceId: String): Map<String, List<String>> =
+    _wffFacePhotos.value[faceId].orEmpty()
+
+  /** Removes all saved WFF settings, complications, flavors, and photo refs when deleting [faceId]. */
   fun deleteWffFaceConfigs(faceId: String) {
-    val prefix = "$KEY_WFF_CONFIG_PREFIX$faceId::"
+    val prefixes = listOf(
+      "$KEY_WFF_CONFIG_PREFIX$faceId::",
+      "$KEY_WFF_COMP_PREFIX$faceId::",
+      "$KEY_WFF_PHOTOS_PREFIX$faceId::",
+    )
+    val flavorKey = "$KEY_WFF_FLAVOR_PREFIX$faceId"
     val editor = prefs.edit()
     var removedAny = false
     for (k in prefs.all.keys) {
-      if (k.startsWith(prefix)) {
+      if (k == flavorKey || prefixes.any { k.startsWith(it) }) {
         editor.remove(k)
         removedAny = true
       }
     }
     if (removedAny) {
       editor.apply()
-      val updated = _wffFaceConfigs.value.toMutableMap()
-      updated.remove(faceId)
-      _wffFaceConfigs.value = updated
+      _wffFaceConfigs.value = _wffFaceConfigs.value.toMutableMap().apply { remove(faceId) }
+      _wffComplicationProviders.value = _wffComplicationProviders.value.toMutableMap().apply { remove(faceId) }
+      _wffSelectedFlavors.value = _wffSelectedFlavors.value.toMutableMap().apply { remove(faceId) }
+      _wffFacePhotos.value = _wffFacePhotos.value.toMutableMap().apply { remove(faceId) }
     }
   }
 
@@ -404,5 +498,12 @@ class AuraPrefs(context: Context) {
     private const val KEY_TIMER_FULLSCREEN_DEFAULT = "timer_fullscreen_default"
     private const val KEY_TIMER_FULLSCREEN_ON_START = "timer_fullscreen_on_start"
     private const val KEY_WFF_CONFIG_PREFIX = "wff_cfg_"
+    private const val KEY_WFF_COMP_PREFIX = "wff_comp_"
+    private const val KEY_WFF_FLAVOR_PREFIX = "wff_flavor_"
+    private const val KEY_WFF_PHOTOS_PREFIX = "wff_photos_"
+    private const val KEY_STEP_GOAL = "step_goal"
+    private const val KEY_STEP_BASELINE_DAY = "step_baseline_day"
+    private const val KEY_STEP_BASELINE_VAL = "step_baseline_val"
+    private const val KEY_STEP_LAST_DAILY = "step_last_daily"
   }
 }

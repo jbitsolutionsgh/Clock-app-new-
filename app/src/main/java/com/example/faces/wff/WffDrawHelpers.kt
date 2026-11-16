@@ -2,6 +2,7 @@ package com.example.faces.wff
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
@@ -34,6 +35,7 @@ internal object WffDrawHelpers {
     val rectF = RectF()
     val destRectF = RectF()
     val path = Path()
+    val hitMatrix = Matrix()
 
     private val exprSlots = IdentityHashMap<CompiledWffExpr, EvalCacheSlot>()
     private val filterCache = HashMap<Int, PorterDuffColorFilter>()
@@ -104,7 +106,7 @@ internal object WffDrawHelpers {
     return loaded
   }
 
-  /** Decodes only referenced bitmaps (including Condition branches, PartImages, and BitmapFont glyphs). */
+  /** Decodes only referenced bitmaps (including Condition branches, ComplicationSlots, Photos defaults, PartImages, and BitmapFont glyphs). */
   fun decodeNeededBitmaps(
     face: WffWatchFace,
     imagesDir: File,
@@ -133,8 +135,12 @@ internal object WffDrawHelpers {
           node.branches.forEach { b -> b.children.forEach(::scan) }
           node.defaultChildren.forEach(::scan)
         }
-        is WffSceneNode.PartImage -> node.resources.forEach { res ->
-          recordUsage(res, node.width, node.height)
+        is WffSceneNode.ComplicationSlot -> {
+          node.templates.forEach { tpl -> tpl.children.forEach(::scan) }
+        }
+        is WffSceneNode.PartImage -> {
+          node.resources.forEach { res -> recordUsage(res, node.width, node.height) }
+          recordUsage(node.photos?.defaultResource, node.width, node.height)
         }
         is WffSceneNode.AnalogClock -> {
           node.hourHands.forEach { recordUsage(it.resource, it.width, it.height) }

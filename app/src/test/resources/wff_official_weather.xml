@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Weather Official" />
+  <Scene backgroundColor="#FF0C1524">
+    <Localization calendar="GREGORIAN" locales="en_US" />
+    <DigitalClock x="60" y="95" width="330" height="90">
+      <TimeText format="HH:mm" hourFormat="24" align="CENTER" x="0" y="0" width="330" height="90">
+        <Font family="SYNC_TO_DEVICE" size="64" color="#FFFFFFFF" />
+      </TimeText>
+    </DigitalClock>
+    <Condition>
+      <Expressions>
+        <Expression name="hasWeather">[WEATHER.IS_AVAILABLE] == 1</Expression>
+      </Expressions>
+      <Compare expression="hasWeather">
+        <PartText x="60" y="230" width="330" height="50">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="24" color="#FF38BDF8">
+              <Template>%s %.0f°</Template>
+              <Parameter expression="[WEATHER.CONDITION_NAME]" />
+              <Parameter expression="[WEATHER.TEMPERATURE]" />
+            </Font>
+          </Text>
+        </PartText>
+      </Compare>
+      <Default>
+        <PartText x="60" y="230" width="330" height="50">
+          <Text align="CENTER">
+            <Font family="SYNC_TO_DEVICE" size="20" color="#FF94A3B8">Weather: No data (offline)</Font>
+          </Text>
+        </PartText>
+      </Default>
+    </Condition>
+  </Scene>
+</WatchFace>

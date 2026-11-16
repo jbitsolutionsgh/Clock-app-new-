@@ -1,10 +1,13 @@
 package com.example.faces.wff
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import com.example.core.FaceData
 import com.example.core.FaceRenderMode
@@ -25,8 +29,8 @@ import kotlin.math.min
 /**
  * High-efficiency Compose Canvas renderer for parsed [WffWatchFace] scenes.
  * Supports Scene/Group Conditions, Variants, animated Transforms, UserConfigurations,
- * custom TTF & BitmapFonts, Text Shadow/Outline, and Image blend modes while keeping
- * evaluation strictly inside the Canvas draw block.
+ * ComplicationSlots + tap navigation, PhotosConfiguration + mask blending,
+ * custom TTF & BitmapFonts, Text Shadow/Outline, and Image blend modes.
  */
 internal object WffRenderer {
 
@@ -45,7 +49,7 @@ internal object WffRenderer {
     ),
   )
 
-  /** Renders [face] proportionally centered inside the available stage bounds. */
+  /** Renders [face] proportionally centered inside the available stage bounds with interactive tap zones. */
   @Composable
   fun Render(
     face: WffWatchFace,
@@ -57,6 +61,13 @@ internal object WffRenderer {
     animController: WffAnimationController,
     nowElapsedMsProvider: () -> Long,
     mode: FaceRenderMode,
+    complicationProviders: Map<String, AuraComplicationProvider> = emptyMap(),
+    photoBitmaps: Map<String, List<Bitmap>> = emptyMap(),
+    photoTapCounts: Map<String, Int> = emptyMap(),
+    visibleCount: Int = 0,
+    showEventTitles: Boolean = true,
+    onPhotoTap: (String) -> Unit = {},
+    onComplicationTap: (String, AuraComplicationProvider) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
   ) {
     val density = LocalDensity.current
@@ -64,6 +75,8 @@ internal object WffRenderer {
     val customFonts = remember(face.id, fontFileMap) {
       WffDrawHelpers.loadCustomFonts(fontsDir, fontFileMap)
     }
+    val slotHits = remember(face.id) { ArrayList<WffInteractiveSlotHit>(8) }
+    val photoHits = remember(face.id) { ArrayList<WffInteractivePhotoHit>(4) }
 
     BoxWithConstraints(
       modifier = modifier.fillMaxSize(),
@@ -82,7 +95,31 @@ internal object WffRenderer {
         )
       }
 
-      Canvas(modifier = Modifier.fillMaxSize()) {
+      val canvasMod = if (mode == FaceRenderMode.NORMAL) {
+        Modifier
+          .fillMaxSize()
+          .pointerInput(face.id, photoHits, slotHits) {
+            detectTapGestures { offset ->
+              val px = offset.x
+              val py = offset.y
+              val hitSlot = slotHits.lastOrNull { it.rect.contains(px, py) }
+              if (hitSlot != null) {
+                onComplicationTap(hitSlot.slotId, hitSlot.provider)
+                return@detectTapGestures
+              }
+              val hitPhoto = photoHits.lastOrNull { it.rect.contains(px, py) }
+              if (hitPhoto != null) {
+                onPhotoTap(hitPhoto.configId)
+              }
+            }
+          }
+      } else {
+        Modifier.fillMaxSize()
+      }
+
+      Canvas(modifier = canvasMod) {
+        slotHits.clear()
+        photoHits.clear()
         val evalCtx = evalCtxProvider()
         val nowMs = nowElapsedMsProvider()
         drawWatchFace(
@@ -93,7 +130,14 @@ internal object WffRenderer {
           animController = animController,
           nowElapsedMs = nowMs,
           mode = mode,
+          complicationProviders = complicationProviders,
+          photoBitmaps = photoBitmaps,
+          photoTapCounts = photoTapCounts,
+          visibleCount = visibleCount,
+          showEventTitles = showEventTitles,
           scratch = scratch,
+          slotHits = slotHits,
+          photoHits = photoHits,
         )
       }
     }
@@ -118,9 +162,12 @@ internal object WffRenderer {
       WffEvalContext(
         data = sampleThumbnailData,
         configRuntime = if (face.userConfigs.isNotEmpty()) WffConfigRuntime(face.userConfigs, emptyMap()) else null,
+        strings = face.stringResources,
       )
     }
     val thumbAnim = remember(face.id) { WffAnimationController() }
+    val dummySlotHits = remember(face.id) { ArrayList<WffInteractiveSlotHit>(4) }
+    val dummyPhotoHits = remember(face.id) { ArrayList<WffInteractivePhotoHit>(2) }
 
     BoxWithConstraints(
       modifier = modifier,
@@ -141,6 +188,8 @@ internal object WffRenderer {
 
       Box(modifier = Modifier.size(sideDp), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+          dummySlotHits.clear()
+          dummyPhotoHits.clear()
           drawWatchFace(
             face = face,
             bitmaps = bitmaps,
@@ -149,7 +198,14 @@ internal object WffRenderer {
             animController = thumbAnim,
             nowElapsedMs = 0L,
             mode = FaceRenderMode.NORMAL,
+            complicationProviders = emptyMap(),
+            photoBitmaps = emptyMap(),
+            photoTapCounts = emptyMap(),
+            visibleCount = 0,
+            showEventTitles = true,
             scratch = scratch,
+            slotHits = dummySlotHits,
+            photoHits = dummyPhotoHits,
           )
         }
       }
@@ -164,7 +220,14 @@ internal object WffRenderer {
     animController: WffAnimationController,
     nowElapsedMs: Long,
     mode: FaceRenderMode,
+    complicationProviders: Map<String, AuraComplicationProvider>,
+    photoBitmaps: Map<String, List<Bitmap>>,
+    photoTapCounts: Map<String, Int>,
+    visibleCount: Int,
+    showEventTitles: Boolean,
     scratch: WffDrawHelpers.DrawScratch,
+    slotHits: MutableList<WffInteractiveSlotHit>,
+    photoHits: MutableList<WffInteractivePhotoHit>,
   ) {
     val scale = min(size.width / face.width, size.height / face.height)
     val offsetX = (size.width - face.width * scale) * 0.5f
@@ -237,8 +300,29 @@ internal object WffRenderer {
         if (sceneAngle != 0f) canvas.rotate(sceneAngle, face.width * 0.5f, face.height * 0.5f)
         if (sceneScaleX != 1f || sceneScaleY != 1f) canvas.scale(sceneScaleX, sceneScaleY, face.width * 0.5f, face.height * 0.5f)
       }
+      var slotCounter = 0
       for (node in face.nodes) {
-        drawNode(canvas, face, node, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode, scratch, sceneAlpha)
+        slotCounter += drawNode(
+          canvas = canvas,
+          face = face,
+          node = node,
+          bitmaps = bitmaps,
+          customFonts = customFonts,
+          evalCtx = evalCtx,
+          animController = animController,
+          nowElapsedMs = nowElapsedMs,
+          mode = mode,
+          complicationProviders = complicationProviders,
+          photoBitmaps = photoBitmaps,
+          photoTapCounts = photoTapCounts,
+          visibleCount = visibleCount,
+          showEventTitles = showEventTitles,
+          scratch = scratch,
+          parentAlpha = sceneAlpha,
+          slotIndexOffset = slotCounter,
+          slotHits = slotHits,
+          photoHits = photoHits,
+        )
       }
     }
 
@@ -255,9 +339,17 @@ internal object WffRenderer {
     animController: WffAnimationController,
     nowElapsedMs: Long,
     mode: FaceRenderMode,
+    complicationProviders: Map<String, AuraComplicationProvider>,
+    photoBitmaps: Map<String, List<Bitmap>>,
+    photoTapCounts: Map<String, Int>,
+    visibleCount: Int,
+    showEventTitles: Boolean,
     scratch: WffDrawHelpers.DrawScratch,
     parentAlpha: Int,
-  ) {
+    slotIndexOffset: Int,
+    slotHits: MutableList<WffInteractiveSlotHit>,
+    photoHits: MutableList<WffInteractivePhotoHit>,
+  ): Int {
     val isAmbient = mode == FaceRenderMode.AMBIENT
 
     if (node is WffSceneNode.Condition) {
@@ -269,10 +361,15 @@ internal object WffRenderer {
         }
       }
       val toDraw = matchedChildren ?: node.defaultChildren
+      var slotsDrawn = 0
       for (child in toDraw) {
-        drawNode(canvas, face, child, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode, scratch, parentAlpha)
+        slotsDrawn += drawNode(
+          canvas, face, child, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode,
+          complicationProviders, photoBitmaps, photoTapCounts, visibleCount, showEventTitles,
+          scratch, parentAlpha, slotIndexOffset + slotsDrawn, slotHits, photoHits,
+        )
       }
-      return
+      return slotsDrawn
     }
 
     var x = node.x
@@ -330,7 +427,7 @@ internal object WffRenderer {
     }
 
     val effectiveAlpha = (alpha * parentAlpha) / 255
-    if (!visible || effectiveAlpha <= 0) return
+    if (!visible || effectiveAlpha <= 0) return if (node is WffSceneNode.ComplicationSlot) 1 else 0
 
     val save = canvas.save()
     val px = x + width * pivotX
@@ -339,10 +436,47 @@ internal object WffRenderer {
     if (scaleX != 1f || scaleY != 1f) canvas.scale(scaleX, scaleY, px, py)
     canvas.translate(x, y)
 
+    var slotsConsumed = 0
     when (node) {
       is WffSceneNode.Group -> {
-        for (child in node.children) {
-          drawNode(canvas, face, child, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode, scratch, effectiveAlpha)
+        val useGroupLayer = groupNeedsLayer(node)
+        val layerSave = if (useGroupLayer) {
+          val lw = if (width > 0f) width else face.width
+          val lh = if (height > 0f) height else face.height
+          canvas.saveLayer(0f, 0f, lw, lh, null)
+        } else -1
+        try {
+          for (child in node.children) {
+            slotsConsumed += drawNode(
+              canvas, face, child, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode,
+              complicationProviders, photoBitmaps, photoTapCounts, visibleCount, showEventTitles,
+              scratch, effectiveAlpha, slotIndexOffset + slotsConsumed, slotHits, photoHits,
+            )
+          }
+        } finally {
+          if (layerSave >= 0) canvas.restoreToCount(layerSave)
+        }
+      }
+      is WffSceneNode.ComplicationSlot -> {
+        slotsConsumed = 1
+        WffComplicationDrawer.drawComplicationSlot(
+          canvas = canvas,
+          slot = node,
+          width = width,
+          height = height,
+          slotIndex = slotIndexOffset,
+          complicationProviders = complicationProviders,
+          evalCtx = evalCtx,
+          showEventTitles = showEventTitles,
+          scratch = scratch,
+          effectiveAlpha = effectiveAlpha,
+          slotHits = slotHits,
+        ) { child, childAlpha ->
+          drawNode(
+            canvas, face, child, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode,
+            complicationProviders, photoBitmaps, photoTapCounts, visibleCount, showEventTitles,
+            scratch, childAlpha, slotIndexOffset, slotHits, photoHits,
+          )
         }
       }
       is WffSceneNode.Condition -> Unit
@@ -364,7 +498,10 @@ internal object WffRenderer {
           drawTimeText(canvas, face, tt, bitmaps, customFonts, evalCtx, animController, nowElapsedMs, mode, scratch, effectiveAlpha)
         }
       }
-      is WffSceneNode.PartImage -> drawPartImage(canvas, node, width, height, bitmaps, evalCtx, nowElapsedMs, isAmbient, colorOverride, scratch, effectiveAlpha)
+      is WffSceneNode.PartImage -> drawPartImage(
+        canvas, node, width, height, bitmaps, photoBitmaps, photoTapCounts, visibleCount,
+        evalCtx, nowElapsedMs, isAmbient, colorOverride, scratch, effectiveAlpha, photoHits,
+      )
       is WffSceneNode.PartText -> drawPartText(canvas, face, node, width, height, bitmaps, customFonts, evalCtx, colorOverride, mode, scratch, effectiveAlpha)
       is WffSceneNode.PartDraw -> {
         for (shape in node.shapes) {
@@ -374,6 +511,22 @@ internal object WffRenderer {
     }
 
     canvas.restoreToCount(save)
+    return slotsConsumed
+  }
+
+  private fun groupNeedsLayer(group: WffSceneNode.Group): Boolean {
+    fun isMaskBlend(mode: WffBlendMode) =
+      mode == WffBlendMode.SRC_IN || mode == WffBlendMode.DST_IN ||
+        mode == WffBlendMode.SRC_ATOP || mode == WffBlendMode.DST_OUT || mode == WffBlendMode.XOR
+    return group.children.any { child ->
+      when (child) {
+        is WffSceneNode.PartImage -> isMaskBlend(child.blendMode)
+        is WffSceneNode.Condition ->
+          child.branches.any { b -> b.children.any { it is WffSceneNode.PartImage && isMaskBlend(it.blendMode) } } ||
+            child.defaultChildren.any { it is WffSceneNode.PartImage && isMaskBlend(it.blendMode) }
+        else -> false
+      }
+    }
   }
 
   private fun drawPartImage(
@@ -382,39 +535,82 @@ internal object WffRenderer {
     width: Float,
     height: Float,
     bitmaps: Map<String, Bitmap>,
+    photoBitmaps: Map<String, List<Bitmap>>,
+    photoTapCounts: Map<String, Int>,
+    visibleCount: Int,
     evalCtx: WffEvalContext,
     nowElapsedMs: Long,
     isAmbient: Boolean,
     colorOverride: Int?,
     scratch: WffDrawHelpers.DrawScratch,
     effectiveAlpha: Int,
+    photoHits: MutableList<WffInteractivePhotoHit>,
   ) {
-    if (node.resources.isEmpty()) return
-    val resKey = if (node.resources.size == 1 || isAmbient) {
-      node.resources.first()
-    } else {
-      val idx = ((nowElapsedMs / 100L) % node.resources.size).toInt().coerceIn(0, node.resources.lastIndex)
-      node.resources[idx]
-    }
-    val bmp = bitmaps[resKey] ?: return
-
     val resolvedTint = colorOverride ?: node.tintColorExpr?.let {
       scratch.evalCached(it, evalCtx).asColorInt(node.tintColor ?: 0)
     } ?: node.tintColor
 
+    // Built-in complication icon token such as [COMPLICATION.MONOCHROMATIC_IMAGE] or [COMPLICATION.SMALL_IMAGE]
+    val firstRes = node.resources.firstOrNull()
+    if (firstRes != null && firstRes.startsWith("[COMPLICATION.", ignoreCase = true)) {
+      WffComplicationDrawer.drawComplicationIcon(
+        canvas = canvas,
+        iconKind = evalCtx.activeComplication?.iconKind,
+        width = width,
+        height = height,
+        tintColor = resolvedTint ?: Color.WHITE,
+        alpha = effectiveAlpha,
+        scratch = scratch,
+      )
+      return
+    }
+
+    // Check PhotosConfiguration (<Photos ...>) user photos before static resources
+    var bmp: Bitmap? = null
+    val photosSpec = node.photos
+    if (photosSpec != null) {
+      val cfgId = photosSpec.configId.orEmpty()
+      val userList = if (cfgId.isNotEmpty()) photoBitmaps[cfgId].orEmpty() else photoBitmaps.values.firstOrNull().orEmpty()
+      if (userList.isNotEmpty()) {
+        val tapPart = if (photosSpec.changeOnTap) photoTapCounts[cfgId] ?: 0 else 0
+        val visPart = if (photosSpec.changeOnVisible) visibleCount / photosSpec.changeAfterEvery else 0
+        val idx = (tapPart + visPart).mod(userList.size)
+        bmp = userList[idx]
+        if (photosSpec.changeOnTap && cfgId.isNotEmpty() && userList.size > 1) {
+          @Suppress("DEPRECATION")
+          canvas.getMatrix(scratch.hitMatrix)
+          scratch.rectF.set(0f, 0f, width, height)
+          val mapped = RectF()
+          scratch.hitMatrix.mapRect(mapped, scratch.rectF)
+          photoHits += WffInteractivePhotoHit(cfgId, mapped)
+        }
+      }
+      if (bmp == null && !photosSpec.defaultResource.isNullOrEmpty()) {
+        bmp = bitmaps[photosSpec.defaultResource]
+      }
+    }
+
+    if (bmp == null) {
+      val resKey = if (node.resources.isEmpty()) null
+      else if (node.resources.size == 1 || isAmbient) node.resources.first()
+      else {
+        val idx = ((nowElapsedMs / 100L) % node.resources.size).toInt().coerceIn(0, node.resources.lastIndex)
+        node.resources[idx]
+      }
+      if (resKey != null) {
+        bmp = bitmaps[resKey]
+      }
+    }
+    if (bmp == null) return
+
     scratch.destRectF.set(0f, 0f, width, height)
     scratch.bitmapPaint.alpha = effectiveAlpha
     scratch.bitmapPaint.colorFilter = resolvedTint?.let { scratch.colorFilterFor(it) }
+    scratch.bitmapPaint.xfermode = if (node.blendMode != WffBlendMode.SRC_OVER) scratch.xfermodeFor(node.blendMode) else null
 
-    if (node.blendMode != WffBlendMode.SRC_OVER) {
-      val layerSave = canvas.saveLayer(scratch.destRectF, null)
-      scratch.bitmapPaint.xfermode = scratch.xfermodeFor(node.blendMode)
-      canvas.drawBitmap(bmp, null, scratch.destRectF, scratch.bitmapPaint)
-      scratch.bitmapPaint.xfermode = null
-      canvas.restoreToCount(layerSave)
-    } else {
-      canvas.drawBitmap(bmp, null, scratch.destRectF, scratch.bitmapPaint)
-    }
+    canvas.drawBitmap(bmp, null, scratch.destRectF, scratch.bitmapPaint)
+
+    scratch.bitmapPaint.xfermode = null
     scratch.bitmapPaint.colorFilter = null
   }
 

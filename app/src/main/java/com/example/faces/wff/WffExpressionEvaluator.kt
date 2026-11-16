@@ -53,7 +53,7 @@ internal data class WffValue(
   fun asBoolean(): Boolean = when (kind) {
     Kind.BOOLEAN -> boolVal
     Kind.NUMBER -> numVal != 0.0 && !numVal.isNaN()
-    Kind.STRING -> !strVal.isNullOrEmpty() && !strVal.equals("false", ignoreCase = true) && strVal != "0"
+    Kind.STRING -> !strVal.isNullOrEmpty() && !strVal.equals("false", ignoreCase = true) && strVal != "0" && strVal != "--"
   }
 
   fun asString(): String = when (kind) {
@@ -115,6 +115,10 @@ internal class WffConfigRuntime(
           rawValues[cfg.id] = if (isTrue) "TRUE" else "FALSE"
           numericValues[cfg.id] = if (isTrue) 1.0 else 0.0
         }
+        is WffUserConfig.PhotosConfig -> {
+          rawValues[cfg.id] = activeRaw
+          numericValues[cfg.id] = if (activeRaw.isNotEmpty()) 1.0 else 0.0
+        }
       }
     }
   }
@@ -152,7 +156,9 @@ internal class WffConfigRuntime(
 internal class WffEvalContext(
   var data: FaceData = FaceData(),
   var configRuntime: WffConfigRuntime? = null,
+  var strings: Map<String, String> = emptyMap(),
 ) {
+  var activeComplication: WffResolvedComplication? = null
   var millisVer: Long = 1L
   var secondVer: Long = 1L
   var minuteVer: Long = 1L
@@ -160,6 +166,8 @@ internal class WffEvalContext(
   var dayVer: Long = 1L
   var batteryVer: Long = 1L
   var configVer: Long = 1L
+  var sensorVer: Long = 1L
+  var compVer: Long = 1L
 
   private var prevMillis = -1
   private var prevSec = -1
@@ -169,6 +177,10 @@ internal class WffEvalContext(
   private var prevMonth = -1
   private var prevBatPct = -1
   private var prevBatChg = false
+  private var prevSensors: com.example.core.FaceSensorData? = null
+  private var prevTimerMs = -1L
+  private var prevSwMs = -1L
+  private var prevEvtTitle: String? = null
 
   /** Updates category change counters only when corresponding snapshot values differ. */
   fun syncFromData(updated: FaceData) {
@@ -184,6 +196,21 @@ internal class WffEvalContext(
     }
     if (b.levelPercent != prevBatPct || b.isCharging != prevBatChg) {
       prevBatPct = b.levelPercent; prevBatChg = b.isCharging; batteryVer++
+      compVer++
+    }
+    if (updated.sensors != prevSensors) {
+      prevSensors = updated.sensors
+      sensorVer++
+      compVer++
+    }
+    if (updated.timer.remainingMs != prevTimerMs ||
+      updated.stopwatch.elapsedMs != prevSwMs ||
+      updated.nextEvent?.title != prevEvtTitle
+    ) {
+      prevTimerMs = updated.timer.remainingMs
+      prevSwMs = updated.stopwatch.elapsedMs
+      prevEvtTitle = updated.nextEvent?.title
+      compVer++
     }
   }
 }
@@ -198,6 +225,9 @@ internal class EvalCacheSlot {
   var sDay = -1L
   var sBattery = -1L
   var sConfig = -1L
+  var sSensor = -1L
+  var sComp = -1L
+  var sSlotId: String? = null
   var value: WffValue = WffValue.num(0.0)
 
   fun validFor(expr: CompiledWffExpr, ctx: WffEvalContext): Boolean {
@@ -211,6 +241,10 @@ internal class EvalCacheSlot {
     if ((m and WffExpression.DEP_DAY) != 0 && sDay != ctx.dayVer) return false
     if ((m and WffExpression.DEP_BATTERY) != 0 && sBattery != ctx.batteryVer) return false
     if ((m and WffExpression.DEP_CONFIG) != 0 && sConfig != ctx.configVer) return false
+    if ((m and WffExpression.DEP_SENSORS) != 0 && sSensor != ctx.sensorVer) return false
+    if ((m and WffExpression.DEP_COMPLICATION) != 0 &&
+      (sComp != ctx.compVer || sSlotId != ctx.activeComplication?.slotId)
+    ) return false
     return true
   }
 
@@ -223,6 +257,9 @@ internal class EvalCacheSlot {
     sDay = ctx.dayVer
     sBattery = ctx.batteryVer
     sConfig = ctx.configVer
+    sSensor = ctx.sensorVer
+    sComp = ctx.compVer
+    sSlotId = ctx.activeComplication?.slotId
   }
 }
 
@@ -251,6 +288,7 @@ internal object WffExpressionEvaluator {
   fun evalAst(expr: WffExpr, ctx: WffEvalContext): WffValue = when (expr) {
     is WffExpr.ConstNum -> WffValue.num(expr.value)
     is WffExpr.ConstStr -> WffValue.str(expr.value)
+    is WffExpr.StringIdent -> WffValue.str(WffStringResources.resolve(expr.key, ctx.strings))
     is WffExpr.ConstBool -> WffValue.bool(expr.value)
     is WffExpr.Source -> evalSource(expr.name, ctx)
     is WffExpr.Unary -> {
@@ -420,8 +458,15 @@ internal object WffExpressionEvaluator {
     if (upper.startsWith("CONFIGURATION.")) {
       return ctx.configRuntime?.resolve(source) ?: WffValue.num(0.0)
     }
+    if (upper.startsWith("COMPLICATION.")) {
+      return evalComplicationSource(upper, ctx.activeComplication)
+    }
+    if (upper.startsWith("WEATHER.")) {
+      return evalWeatherSource(upper)
+    }
     val t = ctx.data.time
     val b = ctx.data.battery
+    val s = ctx.data.sensors
     return when (upper) {
       "HOUR_0_11" -> WffValue.num((t.hour24 % 12).toDouble())
       "HOUR_0_11_Z" -> WffValue.str(twoDigits(t.hour24 % 12))
@@ -482,8 +527,64 @@ internal object WffExpressionEvaluator {
       "BATTERY_IS_LOW" -> WffValue.bool(b.levelPercent <= 20)
       "BATTERY_TEMPERATURE_CELSIUS" -> WffValue.num(25.0)
       "BATTERY_TEMPERATURE_FAHRENHEIT" -> WffValue.num(77.0)
+      "STEP_COUNT" -> if (s.stepHardwarePresent && s.hasStepPermission) WffValue.num(s.stepCount.toDouble()) else if (s.stepCount > 0) WffValue.num(s.stepCount.toDouble()) else WffValue.str("--")
+      "STEP_GOAL" -> WffValue.num(s.stepGoal.toDouble())
+      "STEP_PERCENT" -> {
+        val goal = s.stepGoal.coerceAtLeast(1)
+        WffValue.num(((s.stepCount * 100.0) / goal).coerceIn(0.0, 100.0))
+      }
+      "HEART_RATE" -> if (s.heartRateAvailable && s.heartRate > 0) WffValue.num(s.heartRate.toDouble()) else WffValue.str("--")
+      "HEART_RATE_Z" -> if (s.heartRateAvailable && s.heartRate > 0) WffValue.str(s.heartRate.toString().padStart(2, '0')) else WffValue.str("--")
+      "HEART_RATE_IS_AVAILABLE" -> WffValue.bool(s.heartRateAvailable && s.heartRate > 0)
+      "LIGHT_LEVEL", "ILLUMINANCE" -> if (s.lightAvailable) WffValue.num(s.lightLux.toDouble()) else WffValue.str("--")
+      "AMBIENT_PRESSURE", "PRESSURE", "PRESSURE_HPA" -> if (s.pressureAvailable) WffValue.num(s.pressureHpa.toDouble()) else WffValue.str("--")
+      "ACCELEROMETER_IS_SUPPORTED" -> WffValue.bool(s.accelAvailable)
+      "ACCELEROMETER_X" -> WffValue.num(s.accelX.toDouble())
+      "ACCELEROMETER_Y" -> WffValue.num(s.accelY.toDouble())
+      "ACCELEROMETER_Z" -> WffValue.num(s.accelZ.toDouble())
+      "ACCELEROMETER_ANGLE_X" -> WffValue.num(atan2(s.accelX.toDouble(), hypot(s.accelY.toDouble(), s.accelZ.toDouble())) * 180.0 / PI)
+      "ACCELEROMETER_ANGLE_Y" -> WffValue.num(atan2(s.accelY.toDouble(), hypot(s.accelX.toDouble(), s.accelZ.toDouble())) * 180.0 / PI)
+      "ACCELEROMETER_ANGLE_Z" -> WffValue.num(atan2(s.accelZ.toDouble(), hypot(s.accelX.toDouble(), s.accelY.toDouble())) * 180.0 / PI)
+      "ACCELEROMETER_ANGLE_XY" -> WffValue.num(atan2(s.accelY.toDouble(), s.accelX.toDouble()) * 180.0 / PI)
+      "UNREAD_NOTIFICATION_COUNT" -> WffValue.num(0.0)
       else -> WffValue.num(0.0)
     }
+  }
+
+  private fun evalComplicationSource(upper: String, comp: WffResolvedComplication?): WffValue {
+    if (comp == null || comp.isEmpty) {
+      return when (upper) {
+        "COMPLICATION.RANGED_VALUE_VALUE",
+        "COMPLICATION.RANGED_VALUE_MIN",
+        "COMPLICATION.RANGED_VALUE_MAX",
+        "COMPLICATION.GOAL_PROGRESS_VALUE",
+        "COMPLICATION.GOAL_PROGRESS_TARGET_VALUE" -> WffValue.num(0.0)
+        else -> WffValue.str("")
+      }
+    }
+    return when (upper) {
+      "COMPLICATION.TEXT", "COMPLICATION.SHORT_TEXT", "COMPLICATION.LONG_TEXT" -> WffValue.str(comp.text)
+      "COMPLICATION.TITLE", "COMPLICATION.SHORT_TITLE", "COMPLICATION.LONG_TITLE" -> WffValue.str(comp.title)
+      "COMPLICATION.RANGED_VALUE_VALUE" -> WffValue.num(comp.rangedValue.toDouble())
+      "COMPLICATION.RANGED_VALUE_MIN" -> WffValue.num(comp.rangedMin.toDouble())
+      "COMPLICATION.RANGED_VALUE_MAX" -> WffValue.num(comp.rangedMax.toDouble())
+      "COMPLICATION.GOAL_PROGRESS_VALUE" -> WffValue.num(comp.goalValue.toDouble())
+      "COMPLICATION.GOAL_PROGRESS_TARGET_VALUE" -> WffValue.num(comp.goalTarget.toDouble())
+      "COMPLICATION.MONOCHROMATIC_IMAGE",
+      "COMPLICATION.MONOCHROMATIC_IMAGE_AMBIENT",
+      "COMPLICATION.SMALL_IMAGE",
+      "COMPLICATION.SMALL_IMAGE_AMBIENT",
+      -> WffValue.str(comp.iconKind.name)
+      "COMPLICATION.TIMESTAMP" -> WffValue.num(System.currentTimeMillis().toDouble())
+      else -> WffValue.str(comp.text)
+    }
+  }
+
+  private fun evalWeatherSource(upper: String): WffValue = when (upper) {
+    "WEATHER.IS_AVAILABLE" -> WffValue.bool(false)
+    "WEATHER.IS_ERROR" -> WffValue.bool(false)
+    "WEATHER.CONDITION" -> WffValue.num(0.0)
+    else -> WffValue.str("--")
   }
 
   /** Formats a PartText Template + Parameter list into [out]. */
@@ -677,5 +778,110 @@ internal object WffExpressionEvaluator {
     val mIdx = (t.monthNumber - 1).coerceIn(0, 11)
     val isLeap = (t.year % 4 == 0 && t.year % 100 != 0) || (t.year % 400 == 0)
     return daysBefore[mIdx] + (if (isLeap && mIdx >= 2) 1 else 0) + t.dayOfMonth
+  }
+
+  /** Summarizes data-source provenance (Real phone sensor, AuraClock data, or No data) for Diagnostics & Face details. */
+  fun buildDataSourceProvenance(
+    face: WffWatchFace,
+    sensorDiag: com.example.core.FaceSensorDiagnostics?,
+    savedComplicationIds: Map<String, String> = emptyMap(),
+  ): List<com.example.core.WffDataSourceInfo> {
+    val out = ArrayList<com.example.core.WffDataSourceInfo>()
+    val sources = face.usedSources.map { it.uppercase(Locale.US) }.toSet()
+
+    if (sources.any { it in setOf("STEP_COUNT", "STEP_GOAL", "STEP_PERCENT") }) {
+      val avail = sensorDiag?.steps
+      val origin = if (avail == com.example.core.SensorAvailability.AVAILABLE) {
+        com.example.core.WffDataSourceOrigin.REAL_SENSOR
+      } else {
+        com.example.core.WffDataSourceOrigin.NO_DATA
+      }
+      out += com.example.core.WffDataSourceInfo(
+        source = "Steps (STEP_COUNT)",
+        origin = origin,
+        detail = avail?.label ?: "Sensor status pending",
+      )
+    }
+    if (sources.any { it.startsWith("HEART_RATE") }) {
+      val avail = sensorDiag?.heartRate
+      val origin = if (avail == com.example.core.SensorAvailability.AVAILABLE) {
+        com.example.core.WffDataSourceOrigin.REAL_SENSOR
+      } else {
+        com.example.core.WffDataSourceOrigin.NO_DATA
+      }
+      out += com.example.core.WffDataSourceInfo(
+        source = "Heart Rate",
+        origin = origin,
+        detail = if (origin == com.example.core.WffDataSourceOrigin.REAL_SENSOR) "Available" else "No heart rate sensor",
+      )
+    }
+    if (sources.any { it == "LIGHT_LEVEL" || it == "ILLUMINANCE" }) {
+      val avail = sensorDiag?.light
+      val origin = if (avail == com.example.core.SensorAvailability.AVAILABLE) {
+        com.example.core.WffDataSourceOrigin.REAL_SENSOR
+      } else {
+        com.example.core.WffDataSourceOrigin.NO_DATA
+      }
+      out += com.example.core.WffDataSourceInfo("Ambient Light", origin, avail?.label ?: "No light sensor")
+    }
+    if (sources.any { it == "AMBIENT_PRESSURE" || it == "PRESSURE" || it == "PRESSURE_HPA" }) {
+      val avail = sensorDiag?.pressure
+      val origin = if (avail == com.example.core.SensorAvailability.AVAILABLE) {
+        com.example.core.WffDataSourceOrigin.REAL_SENSOR
+      } else {
+        com.example.core.WffDataSourceOrigin.NO_DATA
+      }
+      out += com.example.core.WffDataSourceInfo("Barometer Pressure", origin, avail?.label ?: "No barometer sensor")
+    }
+    if (sources.any { it.startsWith("ACCELEROMETER_") }) {
+      val avail = sensorDiag?.accelerometer
+      val origin = if (avail == com.example.core.SensorAvailability.AVAILABLE) {
+        com.example.core.WffDataSourceOrigin.REAL_SENSOR
+      } else {
+        com.example.core.WffDataSourceOrigin.NO_DATA
+      }
+      out += com.example.core.WffDataSourceInfo("Accelerometer", origin, avail?.label ?: "No accelerometer")
+    }
+    if (sources.any { it.startsWith("WEATHER.") }) {
+      out += com.example.core.WffDataSourceInfo(
+        source = "Weather",
+        origin = com.example.core.WffDataSourceOrigin.NO_DATA,
+        detail = "AuraClock is strictly offline",
+      )
+    }
+
+    var slotIdx = 0
+    fun scanSlots(node: WffSceneNode) {
+      when (node) {
+        is WffSceneNode.Group -> node.children.forEach(::scanSlots)
+        is WffSceneNode.Condition -> {
+          node.branches.forEach { it.children.forEach(::scanSlots) }
+          node.defaultChildren.forEach(::scanSlots)
+        }
+        is WffSceneNode.ComplicationSlot -> {
+          val provider = AuraComplicationProvider.fromId(savedComplicationIds[node.slotId])
+            ?: AuraComplicationProvider.fromPolicy(node.defaultProviderPolicy, node.supportedTypes, slotIdx)
+          slotIdx++
+          val origin = when (provider) {
+            AuraComplicationProvider.STEPS ->
+              if (sensorDiag?.steps == com.example.core.SensorAvailability.AVAILABLE) {
+                com.example.core.WffDataSourceOrigin.REAL_SENSOR
+              } else {
+                com.example.core.WffDataSourceOrigin.NO_DATA
+              }
+            AuraComplicationProvider.EMPTY -> com.example.core.WffDataSourceOrigin.NO_DATA
+            else -> com.example.core.WffDataSourceOrigin.AURACLOCK_DATA
+          }
+          out += com.example.core.WffDataSourceInfo(
+            source = "Slot ${node.slotId}: ${provider.label}",
+            origin = origin,
+            detail = provider.description,
+          )
+        }
+        else -> Unit
+      }
+    }
+    face.nodes.forEach(::scanSlots)
+    return out
   }
 }

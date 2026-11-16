@@ -26,6 +26,11 @@ enum class FaceDataNeed {
   NEXT_EVENT,
   TIMER,
   STOPWATCH,
+  STEPS,
+  HEART_RATE,
+  LIGHT,
+  PRESSURE,
+  ACCELEROMETER,
 }
 
 enum class FaceRenderMode {
@@ -62,6 +67,18 @@ data class WffSkippedDiagnostic(
   val reason: String,
 )
 
+enum class WffDataSourceOrigin(val label: String) {
+  REAL_SENSOR("Real phone sensor"),
+  AURACLOCK_DATA("AuraClock data"),
+  NO_DATA("No data"),
+}
+
+data class WffDataSourceInfo(
+  val source: String,
+  val origin: WffDataSourceOrigin,
+  val detail: String,
+)
+
 data class WffCompatibilitySummary(
   val id: String,
   val name: String,
@@ -71,6 +88,7 @@ data class WffCompatibilitySummary(
   val skippedCount: Int = 0,
   val partlyDrawnItems: List<WffSkippedDiagnostic> = emptyList(),
   val skippedItems: List<WffSkippedDiagnostic> = emptyList(),
+  val dataSources: List<WffDataSourceInfo> = emptyList(),
 )
 
 data class FaceEngineDiagnostics(
@@ -171,6 +189,7 @@ data class FaceData(
   var nextEvent: NextCalendarEvent? = null,
   var timer: FaceTimerData = FaceTimerData(),
   var stopwatch: FaceStopwatchData = FaceStopwatchData(),
+  var sensors: FaceSensorData = FaceSensorData(),
 ) {
   /** Updates this snapshot in place from [other], preserving the existing [time] instance when possible. */
   fun copyFrom(other: FaceData) {
@@ -179,6 +198,7 @@ data class FaceData(
     nextEvent = other.nextEvent
     timer = other.timer
     stopwatch = other.stopwatch
+    sensors = other.sensors
   }
 }
 
@@ -258,6 +278,21 @@ internal class CoreFaceDataSource(context: Context) : FaceDataSource {
           source.nextEvent.collect { evt ->
             publish(current.copy(nextEvent = evt))
           }
+        }
+      }
+    }
+
+    val requestedSensors = buildSet {
+      if (FaceDataNeed.STEPS in needs) add(FaceSensorType.STEP_COUNTER)
+      if (FaceDataNeed.HEART_RATE in needs) add(FaceSensorType.HEART_RATE)
+      if (FaceDataNeed.LIGHT in needs) add(FaceSensorType.LIGHT)
+      if (FaceDataNeed.PRESSURE in needs) add(FaceSensorType.PRESSURE)
+      if (FaceDataNeed.ACCELEROMETER in needs) add(FaceSensorType.ACCELEROMETER)
+    }
+    if (requestedSensors.isNotEmpty()) {
+      launch {
+        CoreSingletons.sensorSource(appContext).observeSensors(requestedSensors).collect { sensorData ->
+          publish(current.copy(sensors = sensorData))
         }
       }
     }

@@ -22,6 +22,8 @@ internal object WffExpression {
   const val DEP_BATTERY = 1 shl 5
   const val DEP_CONFIG = 1 shl 6
   const val DEP_ALWAYS = 1 shl 7
+  const val DEP_SENSORS = 1 shl 8
+  const val DEP_COMPLICATION = 1 shl 9
 
   private val knownSources = setOf(
     "HOUR_0_11", "HOUR_0_11_Z", "HOUR_1_12", "HOUR_1_12_Z",
@@ -41,6 +43,13 @@ internal object WffExpression {
     "TIMEZONE", "TIMEZONE_ABB", "TIMEZONE_OFFSET", "TIMEZONE_OFFSET_DST", "IS_DAYLIGHT_SAVING_TIME",
     "BATTERY_PERCENT", "BATTERY_CHARGING_STATUS", "IS_BATTERY_CHARGING", "BATTERY_IS_LOW",
     "BATTERY_TEMPERATURE_CELSIUS", "BATTERY_TEMPERATURE_FAHRENHEIT",
+    "STEP_COUNT", "STEP_GOAL", "STEP_PERCENT",
+    "HEART_RATE", "HEART_RATE_Z", "HEART_RATE_IS_AVAILABLE",
+    "LIGHT_LEVEL", "ILLUMINANCE",
+    "AMBIENT_PRESSURE", "PRESSURE", "PRESSURE_HPA",
+    "ACCELEROMETER_IS_SUPPORTED", "ACCELEROMETER_X", "ACCELEROMETER_Y", "ACCELEROMETER_Z",
+    "ACCELEROMETER_ANGLE_X", "ACCELEROMETER_ANGLE_Y", "ACCELEROMETER_ANGLE_Z", "ACCELEROMETER_ANGLE_XY",
+    "UNREAD_NOTIFICATION_COUNT",
   )
 
   private val knownFunctions = setOf(
@@ -127,48 +136,79 @@ internal object WffExpression {
     out: StringBuilder,
   ) = WffExpressionEvaluator.formatTimeText(format, hourFormat, data, isAmbient, out)
 
-  /** Collects the minimal set of [FaceDataNeed]s referenced across the entire [face]. */
-  fun scanDataNeeds(face: WffWatchFace): Set<FaceDataNeed> {
-    val needs = HashSet<FaceDataNeed>(2)
+  /** Collects the minimal set of [FaceDataNeed]s referenced across [face] and its active complication providers. */
+  fun scanDataNeeds(
+    face: WffWatchFace,
+    complicationProviders: Map<String, AuraComplicationProvider> = emptyMap(),
+  ): Set<FaceDataNeed> {
+    val needs = HashSet<FaceDataNeed>(4)
     needs += FaceDataNeed.TIME
     var mask = DEP_NONE
-    face.backgroundColorExpr?.let { mask = mask or it.inputMask }
-    face.sceneTransforms.forEach { mask = mask or it.valueExpr.inputMask }
+    val sourceTokens = HashSet<String>(face.usedSources)
 
+    fun scanExpr(expr: CompiledWffExpr?) {
+      if (expr == null) return
+      mask = mask or expr.inputMask
+      collectAstSources(expr.ast, sourceTokens)
+    }
+
+    scanExpr(face.backgroundColorExpr)
+    face.sceneTransforms.forEach { scanExpr(it.valueExpr) }
+
+    var slotIdx = 0
     fun scanNode(node: WffSceneNode) {
-      node.transforms.forEach { mask = mask or it.valueExpr.inputMask }
+      node.transforms.forEach { scanExpr(it.valueExpr) }
       when (node) {
         is WffSceneNode.Group -> node.children.forEach(::scanNode)
         is WffSceneNode.Condition -> {
           node.branches.forEach { b ->
-            mask = mask or b.expression.inputMask
+            scanExpr(b.expression)
             b.children.forEach(::scanNode)
           }
           node.defaultChildren.forEach(::scanNode)
         }
         is WffSceneNode.AnalogClock -> {
           fun scanHand(h: WffHandNode) {
-            h.tintColorExpr?.let { mask = mask or it.inputMask }
-            h.transforms.forEach { mask = mask or it.valueExpr.inputMask }
+            scanExpr(h.tintColorExpr)
+            h.transforms.forEach { scanExpr(it.valueExpr) }
           }
           node.hourHands.forEach(::scanHand)
           node.minuteHands.forEach(::scanHand)
           node.secondHands.forEach(::scanHand)
         }
         is WffSceneNode.DigitalClock -> node.timeTexts.forEach { tt ->
-          tt.colorExpr?.let { mask = mask or it.inputMask }
-          tt.transforms.forEach { mask = mask or it.valueExpr.inputMask }
+          scanExpr(tt.colorExpr)
+          tt.transforms.forEach { scanExpr(it.valueExpr) }
         }
-        is WffSceneNode.PartImage -> node.tintColorExpr?.let { mask = mask or it.inputMask }
+        is WffSceneNode.PartImage -> {
+          scanExpr(node.tintColorExpr)
+          scanExpr(node.photos?.sourceExpr)
+        }
+        is WffSceneNode.ComplicationSlot -> {
+          val provider = complicationProviders[node.slotId]
+            ?: AuraComplicationProvider.fromPolicy(node.defaultProviderPolicy, node.supportedTypes, slotIdx)
+          slotIdx++
+          when (provider) {
+            AuraComplicationProvider.STEPS -> needs += FaceDataNeed.STEPS
+            AuraComplicationProvider.BATTERY -> needs += FaceDataNeed.BATTERY
+            AuraComplicationProvider.NEXT_EVENT -> needs += FaceDataNeed.NEXT_EVENT
+            AuraComplicationProvider.TIMER -> needs += FaceDataNeed.TIMER
+            AuraComplicationProvider.STOPWATCH -> needs += FaceDataNeed.STOPWATCH
+            AuraComplicationProvider.DATE,
+            AuraComplicationProvider.DAY_OF_WEEK,
+            AuraComplicationProvider.EMPTY -> Unit
+          }
+          node.templates.forEach { tpl -> tpl.children.forEach(::scanNode) }
+        }
         is WffSceneNode.PartText -> {
-          node.colorExpr?.let { mask = mask or it.inputMask }
-          node.parameters.forEach { mask = mask or it.inputMask }
+          scanExpr(node.colorExpr)
+          node.parameters.forEach(::scanExpr)
         }
         is WffSceneNode.PartDraw -> node.shapes.forEach { shape ->
-          shape.fillColorExpr?.let { mask = mask or it.inputMask }
-          shape.strokeColorExpr?.let { mask = mask or it.inputMask }
+          scanExpr(shape.fillColorExpr)
+          scanExpr(shape.strokeColorExpr)
           if (shape is WffDrawShape.Arc) {
-            shape.transforms.forEach { mask = mask or it.valueExpr.inputMask }
+            shape.transforms.forEach { scanExpr(it.valueExpr) }
           }
         }
       }
@@ -176,6 +216,16 @@ internal object WffExpression {
 
     face.nodes.forEach(::scanNode)
     if ((mask and DEP_BATTERY) != 0) needs += FaceDataNeed.BATTERY
+    for (src in sourceTokens) {
+      val up = src.uppercase(Locale.US)
+      when {
+        up in setOf("STEP_COUNT", "STEP_GOAL", "STEP_PERCENT") -> needs += FaceDataNeed.STEPS
+        up.startsWith("HEART_RATE") -> needs += FaceDataNeed.HEART_RATE
+        up == "LIGHT_LEVEL" || up == "ILLUMINANCE" -> needs += FaceDataNeed.LIGHT
+        up == "AMBIENT_PRESSURE" || up == "PRESSURE" || up == "PRESSURE_HPA" -> needs += FaceDataNeed.PRESSURE
+        up.startsWith("ACCELEROMETER_") -> needs += FaceDataNeed.ACCELEROMETER
+      }
+    }
     return needs
   }
 
@@ -188,6 +238,7 @@ internal object WffExpression {
     face: WffWatchFace,
     renderMode: FaceRenderMode,
     hasActiveAnimation: Boolean = false,
+    complicationProviders: Map<String, AuraComplicationProvider> = emptyMap(),
   ): FaceUpdatePolicy {
     if (renderMode == FaceRenderMode.AMBIENT) {
       return FaceUpdatePolicy.EVERY_MINUTE
@@ -197,6 +248,7 @@ internal object WffExpression {
     }
     var needsMillis = false
     var needsSecond = false
+    var slotIdx = 0
 
     fun checkMask(mask: Int) {
       if ((mask and (DEP_MILLIS or DEP_ALWAYS)) != 0) needsMillis = true
@@ -250,6 +302,15 @@ internal object WffExpression {
           tt.transforms.forEach { checkMask(it.valueExpr.inputMask) }
         }
         is WffSceneNode.PartImage -> node.tintColorExpr?.let { checkMask(it.inputMask) }
+        is WffSceneNode.ComplicationSlot -> {
+          val provider = complicationProviders[node.slotId]
+            ?: AuraComplicationProvider.fromPolicy(node.defaultProviderPolicy, node.supportedTypes, slotIdx)
+          slotIdx++
+          if (provider == AuraComplicationProvider.TIMER || provider == AuraComplicationProvider.STOPWATCH) {
+            needsSecond = true
+          }
+          node.templates.forEach { tpl -> tpl.children.forEach(::walk) }
+        }
         is WffSceneNode.PartText -> {
           node.colorExpr?.let { checkMask(it.inputMask) }
           node.parameters.forEach { checkMask(it.inputMask) }
@@ -270,28 +331,55 @@ internal object WffExpression {
     }
   }
 
+  /** Collects every `[SOURCE]` name referenced inside an AST [expr]. */
+  fun collectAstSources(expr: WffExpr, out: MutableSet<String>) {
+    when (expr) {
+      is WffExpr.Source -> out += expr.name
+      is WffExpr.Unary -> collectAstSources(expr.operand, out)
+      is WffExpr.Binary -> {
+        collectAstSources(expr.left, out)
+        collectAstSources(expr.right, out)
+      }
+      is WffExpr.Ternary -> {
+        collectAstSources(expr.cond, out)
+        collectAstSources(expr.ifTrue, out)
+        collectAstSources(expr.ifFalse, out)
+      }
+      is WffExpr.Call -> expr.args.forEach { collectAstSources(it, out) }
+      is WffExpr.ConstNum, is WffExpr.ConstStr, is WffExpr.StringIdent, is WffExpr.ConstBool -> Unit
+    }
+  }
+
   private fun inspectAst(
     expr: WffExpr,
     unknownSources: MutableSet<String>,
     unknownFuncs: MutableSet<String>,
   ): Int = when (expr) {
-    is WffExpr.ConstNum, is WffExpr.ConstStr, is WffExpr.ConstBool -> DEP_NONE
+    is WffExpr.ConstNum, is WffExpr.ConstStr, is WffExpr.StringIdent, is WffExpr.ConstBool -> DEP_NONE
     is WffExpr.Source -> {
       val upper = expr.name.uppercase(Locale.US)
-      if (upper.startsWith("CONFIGURATION.")) {
-        DEP_CONFIG
-      } else {
-        if (upper !in knownSources) {
-          unknownSources += expr.name
-        }
-        when {
-          upper in setOf("MILLISECOND", "SECOND_MILLISECOND", "UTC_TIMESTAMP") -> DEP_MILLIS or DEP_SECOND
-          upper.contains("SECOND") -> DEP_SECOND
-          upper.contains("MINUTE") -> DEP_MINUTE
-          upper.contains("HOUR") || upper.contains("AMPM") || upper == "IS_24_HOUR_MODE" -> DEP_HOUR
-          upper.contains("DAY") || upper.contains("MONTH") || upper.contains("YEAR") || upper.contains("TIMEZONE") -> DEP_DAY
-          upper.contains("BATTERY") -> DEP_BATTERY
-          else -> DEP_NONE
+      when {
+        upper.startsWith("CONFIGURATION.") -> DEP_CONFIG
+        upper.startsWith("COMPLICATION.") -> DEP_COMPLICATION
+        upper.startsWith("WEATHER.") -> DEP_NONE
+        else -> {
+          if (upper !in knownSources) {
+            unknownSources += expr.name
+          }
+          when {
+            upper in setOf("MILLISECOND", "SECOND_MILLISECOND", "UTC_TIMESTAMP") -> DEP_MILLIS or DEP_SECOND
+            upper.contains("SECOND") -> DEP_SECOND
+            upper.contains("MINUTE") -> DEP_MINUTE
+            upper.contains("HOUR") || upper.contains("AMPM") || upper == "IS_24_HOUR_MODE" -> DEP_HOUR
+            upper.contains("DAY") || upper.contains("MONTH") || upper.contains("YEAR") || upper.contains("TIMEZONE") -> DEP_DAY
+            upper.contains("BATTERY") -> DEP_BATTERY
+            upper in setOf("STEP_COUNT", "STEP_GOAL", "STEP_PERCENT") ||
+              upper.startsWith("HEART_RATE") ||
+              upper == "LIGHT_LEVEL" || upper == "ILLUMINANCE" ||
+              upper == "AMBIENT_PRESSURE" || upper == "PRESSURE" || upper == "PRESSURE_HPA" ||
+              upper.startsWith("ACCELEROMETER_") -> DEP_SENSORS
+            else -> DEP_NONE
+          }
         }
       }
     }
@@ -510,7 +598,8 @@ internal object WffExpression {
             WffExpr.ConstNum(input.substring(start, pos).toDoubleOrNull() ?: 0.0)
           } else {
             val start = pos
-            while (pos < input.length && (input[pos].isLetterOrDigit() || input[pos] == '_')) pos++
+            if (input[pos] == '@') pos++
+            while (pos < input.length && (input[pos].isLetterOrDigit() || input[pos] == '_' || input[pos] == '/' || input[pos] == ':')) pos++
             val ident = input.substring(start, pos)
             if (ident.isEmpty()) {
               pos++
@@ -533,7 +622,7 @@ internal object WffExpression {
               when (ident.lowercase(Locale.US)) {
                 "true" -> WffExpr.ConstBool(true)
                 "false" -> WffExpr.ConstBool(false)
-                else -> WffExpr.ConstStr(ident)
+                else -> WffExpr.StringIdent(ident)
               }
             }
           }

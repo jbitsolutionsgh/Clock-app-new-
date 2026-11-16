@@ -128,3 +128,14 @@ interface StandByDiagnosticsProvider {
   fun recordDreamStarted(startedTimeLabel: String)
   fun recordDreamEventsShown(count: Int)
 }
+
+/** High-level navigation targets requested when tapping a watch face ComplicationSlot. */
+enum class AppTabTarget {
+  TIMER,
+  CLOCK,
+  STOPWATCH,
+  SETTINGS,
+  SETTINGS_CALENDAR,
+  DIAGNOSTICS,
+}
+

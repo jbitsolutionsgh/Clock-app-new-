@@ -91,6 +91,8 @@ private enum class ActionSlot(val title: String) {
 @Composable
 fun SettingsScreen(
   onPreviewStandBy: () -> Unit = {},
+  openDiagnosticsRequest: Boolean = false,
+  onDiagnosticsRequestHandled: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -98,6 +100,12 @@ fun SettingsScreen(
   val earbudController = remember { EarbudChiplet.ensureInitialized(context) }
 
   var showDiagnostics by remember { mutableStateOf(false) }
+  androidx.compose.runtime.LaunchedEffect(openDiagnosticsRequest) {
+    if (openDiagnosticsRequest) {
+      showDiagnostics = true
+      onDiagnosticsRequestHandled()
+    }
+  }
   if (showDiagnostics) {
     BackHandler { showDiagnostics = false }
     EarbudChiplet.DiagnosticsScreen(

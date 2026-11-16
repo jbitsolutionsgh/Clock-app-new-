@@ -1,21 +1,48 @@
 package com.example.faces.wff
 
+import android.Manifest
+import android.os.Build
 import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
 import com.example.core.FaceData
+import com.example.core.FaceDataNeed
 import com.example.core.FaceRenderMode
 import com.example.core.FaceTimeData
 import com.example.core.FaceUpdatePolicy
@@ -31,8 +58,8 @@ import java.util.Calendar
 
 /**
  * [WatchFace] adapter backed by an imported Watch Face Format [WffStoredFace].
- * Drives updates strictly from declared needs, runs animations only while RESUMED at capped fps,
- * and drops to once-per-minute in ambient mode or when only hour/minute elements are present.
+ * Drives updates strictly from declared needs, runs animations & sensors only while RESUMED,
+ * handles ComplicationSlot tap routing, user photos, and prompts runtime step permission only if needed.
  */
 internal class WffFace(
   val storedFace: WffStoredFace,
@@ -66,13 +93,34 @@ internal class WffFace(
     val lifecycleOwner = LocalLifecycleOwner.current
     val prefs = remember { CoreSingletons.prefs(context) }
     val dataSource = remember { CoreSingletons.faceDataSource(context) }
+    val sensorSource = remember { CoreSingletons.sensorSource(context) }
 
     val allWffConfigs by prefs.wffFaceConfigs.collectAsStateWithLifecycle()
     val savedConfig = allWffConfigs[storedFace.id].orEmpty()
 
-    val needs = remember(storedFace.id) { WffExpression.scanDataNeeds(storedFace.face) }
-    val basePolicy = remember(storedFace.id, renderMode) {
-      WffExpression.updatePolicy(storedFace.face, renderMode, hasActiveAnimation = false)
+    val allCompProviders by prefs.wffComplicationProviders.collectAsStateWithLifecycle()
+    val savedCompRaw = allCompProviders[storedFace.id].orEmpty()
+    val activeProviders = remember(storedFace.id, savedCompRaw) {
+      buildMap {
+        savedCompRaw.forEach { (slotId, provId) ->
+          AuraComplicationProvider.fromId(provId)?.let { put(slotId, it) }
+        }
+      }
+    }
+
+    val allPhotos by prefs.wffFacePhotos.collectAsStateWithLifecycle()
+    val savedPhotos = allPhotos[storedFace.id].orEmpty()
+    val showEventTitles by prefs.standByShowEventTitles.collectAsStateWithLifecycle()
+
+    val photoBitmaps = remember(storedFace.id, savedPhotos) {
+      WffPhotoManager.decodeFacePhotos(context, storedFace.id, savedPhotos)
+    }
+
+    val needs = remember(storedFace.id, activeProviders) {
+      WffExpression.scanDataNeeds(storedFace.face, activeProviders)
+    }
+    val basePolicy = remember(storedFace.id, renderMode, activeProviders) {
+      WffExpression.updatePolicy(storedFace.face, renderMode, hasActiveAnimation = false, activeProviders)
     }
     val effectivePolicy = remember(basePolicy, smoothSeconds, renderMode) {
       if (basePolicy == FaceUpdatePolicy.SMOOTH_FRAME && (!smoothSeconds || renderMode == FaceRenderMode.AMBIENT)) {
@@ -90,24 +138,53 @@ internal class WffFace(
         configRuntime = if (storedFace.face.userConfigs.isNotEmpty()) {
           WffConfigRuntime(storedFace.face.userConfigs, savedConfig)
         } else null,
+        strings = storedFace.face.stringResources,
       ).apply { syncFromData(liveData) }
     }
 
     val frameVersion = remember(storedFace.id) { mutableLongStateOf(0L) }
     val nowElapsedMs = remember(storedFace.id) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     val transitionWake = remember(storedFace.id) { MutableSharedFlow<Unit>(extraBufferCapacity = 2) }
+    val visibleCount = remember(storedFace.id) { mutableIntStateOf(0) }
+    val photoTapCounts = remember(storedFace.id) { mutableStateMapOf<String, Int>() }
 
-    LaunchedEffect(storedFace.id, savedConfig) {
-      if (storedFace.face.userConfigs.isNotEmpty()) {
-        evalCtx.configRuntime = WffConfigRuntime(storedFace.face.userConfigs, savedConfig)
-        evalCtx.configVer++
-        nowElapsedMs.longValue = SystemClock.elapsedRealtime()
-        frameVersion.longValue++
-        transitionWake.tryEmit(Unit)
-      }
+    var stepPermissionGranted by remember(storedFace.id) { mutableStateOf(sensorSource.hasStepPermission()) }
+    var dismissedStepBanner by remember(storedFace.id) { mutableStateOf(false) }
+
+    val stepPermissionLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+      stepPermissionGranted = granted || sensorSource.hasStepPermission()
+      sensorSource.refreshDiagnostics()
     }
 
-    LaunchedEffect(lifecycleOwner, storedFace.id, needs, effectivePolicy, renderMode) {
+    DisposableEffect(lifecycleOwner, storedFace.id) {
+      val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          visibleCount.intValue += 1
+          val perm = sensorSource.hasStepPermission()
+          if (perm != stepPermissionGranted) {
+            stepPermissionGranted = perm
+            sensorSource.refreshDiagnostics()
+          }
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(storedFace.id, savedConfig, activeProviders) {
+      if (storedFace.face.userConfigs.isNotEmpty()) {
+        evalCtx.configRuntime = WffConfigRuntime(storedFace.face.userConfigs, savedConfig)
+      }
+      evalCtx.configVer++
+      evalCtx.compVer++
+      nowElapsedMs.longValue = SystemClock.elapsedRealtime()
+      frameVersion.longValue++
+      transitionWake.tryEmit(Unit)
+    }
+
+    LaunchedEffect(lifecycleOwner, storedFace.id, needs, effectivePolicy, renderMode, stepPermissionGranted) {
       val hasAnyAnim = hasAnyAnimation(storedFace.face)
       val sweepFps = maxSweepFrequency(storedFace.face)
       val hasTimeMillis = usesSubSecondTime(storedFace.face)
@@ -180,21 +257,79 @@ internal class WffFace(
       }
     }
 
-    WffRenderer.Render(
-      face = storedFace.face,
-      imagesDir = storedFace.imagesDir,
-      fontsDir = storedFace.fontsDir,
-      resourceFileMap = storedFace.resourceFileMap,
-      fontFileMap = storedFace.fontFileMap,
-      evalCtxProvider = {
-        frameVersion.longValue
-        evalCtx
-      },
-      animController = animController,
-      nowElapsedMsProvider = { nowElapsedMs.longValue },
-      mode = renderMode,
-      modifier = modifier,
-    )
+    Box(modifier = modifier.fillMaxSize()) {
+      WffRenderer.Render(
+        face = storedFace.face,
+        imagesDir = storedFace.imagesDir,
+        fontsDir = storedFace.fontsDir,
+        resourceFileMap = storedFace.resourceFileMap,
+        fontFileMap = storedFace.fontFileMap,
+        evalCtxProvider = {
+          frameVersion.longValue
+          evalCtx
+        },
+        animController = animController,
+        nowElapsedMsProvider = { nowElapsedMs.longValue },
+        mode = renderMode,
+        complicationProviders = activeProviders,
+        photoBitmaps = photoBitmaps,
+        photoTapCounts = photoTapCounts,
+        visibleCount = visibleCount.intValue,
+        showEventTitles = showEventTitles,
+        onPhotoTap = { configId ->
+          photoTapCounts[configId] = (photoTapCounts[configId] ?: 0) + 1
+          frameVersion.longValue++
+        },
+        onComplicationTap = { _, provider ->
+          provider.tapTarget?.let { CoreSingletons.requestTab(it) }
+        },
+        modifier = Modifier.fillMaxSize(),
+      )
+
+      val showStepPrompt = renderMode == FaceRenderMode.NORMAL &&
+        FaceDataNeed.STEPS in needs &&
+        !stepPermissionGranted &&
+        !dismissedStepBanner &&
+        sensorSource.hasStepHardware() &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
+      if (showStepPrompt) {
+        Surface(
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("wff_step_permission_banner"),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Text(
+              text = "Allow step access for live steps on this face",
+              style = MaterialTheme.typography.bodySmall,
+              color = Color.White,
+              modifier = Modifier.weight(1f),
+            )
+            Button(
+              onClick = { stepPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) },
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+              modifier = Modifier.testTag("wff_allow_steps_button"),
+            ) {
+              Text("Allow", style = MaterialTheme.typography.labelMedium)
+            }
+            TextButton(
+              onClick = { dismissedStepBanner = true },
+              contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+            ) {
+              Text("Later", style = MaterialTheme.typography.labelMedium)
+            }
+          }
+        }
+      }
+    }
   }
 
   private fun hasAnyAnimation(face: WffWatchFace): Boolean {
@@ -310,5 +445,31 @@ internal class WffFace(
       target.monthNumber = cal.get(Calendar.MONTH) + 1
       target.dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
     }
+  }
+
+  companion object {
+    /** Collects all ComplicationSlots anywhere inside [face] scene hierarchy. */
+    fun collectComplicationSlots(face: WffWatchFace): List<WffSceneNode.ComplicationSlot> {
+      val out = mutableListOf<WffSceneNode.ComplicationSlot>()
+      fun walk(node: WffSceneNode) {
+        when (node) {
+          is WffSceneNode.ComplicationSlot -> out += node
+          is WffSceneNode.Group -> node.children.forEach(::walk)
+          is WffSceneNode.Condition -> {
+            node.branches.forEach { it.children.forEach(::walk) }
+            node.defaultChildren.forEach(::walk)
+          }
+          else -> Unit
+        }
+      }
+      face.nodes.forEach(::walk)
+      return out
+    }
+
+    /** True when the face exposes options, flavors, complications, or photo slots to customize. */
+    fun hasCustomizableOptions(face: WffWatchFace): Boolean =
+      face.userConfigs.isNotEmpty() ||
+        (face.flavors?.flavors?.isNotEmpty() == true) ||
+        collectComplicationSlots(face).any { it.isCustomizable }
   }
 }

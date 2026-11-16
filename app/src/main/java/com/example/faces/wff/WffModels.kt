@@ -38,6 +38,9 @@ enum class WffBlendMode(val porterDuff: PorterDuff.Mode) {
   LIGHTEN(PorterDuff.Mode.LIGHTEN),
   SRC_IN(PorterDuff.Mode.SRC_IN),
   SRC_ATOP(PorterDuff.Mode.SRC_ATOP),
+  DST_IN(PorterDuff.Mode.DST_IN),
+  DST_OUT(PorterDuff.Mode.DST_OUT),
+  DST_OVER(PorterDuff.Mode.DST_OVER),
   XOR(PorterDuff.Mode.XOR),
 }
 
@@ -61,8 +64,11 @@ sealed class WffExpr {
   /** Constant numeric literal. */
   data class ConstNum(val value: Double) : WffExpr()
 
-  /** Constant string literal. */
+  /** Constant string literal (quoted). */
   data class ConstStr(val value: String) : WffExpr()
+
+  /** Unquoted identifier (such as a string resource name "greeting") resolved against strings.xml/arsc. */
+  data class StringIdent(val key: String) : WffExpr()
 
   /** Constant boolean literal. */
   data class ConstBool(val value: Boolean) : WffExpr()
@@ -395,7 +401,7 @@ sealed class WffSceneNode {
     override val variants: List<WffVariant>,
   ) : WffSceneNode()
 
-  /** Image layer rendering a resource (or frame list) with optional tint expression and blend mode. */
+  /** Image layer rendering a resource, frame list, or user PhotosConfiguration entry. */
   data class PartImage(
     override val x: Float,
     override val y: Float,
@@ -412,11 +418,36 @@ sealed class WffSceneNode {
     val tintColorExpr: CompiledWffExpr? = null,
     val blendMode: WffBlendMode = WffBlendMode.SRC_OVER,
     val resources: List<String>,
+    val photos: WffPhotosSpec? = null,
     override val transforms: List<WffTransform>,
     override val variants: List<WffVariant>,
   ) : WffSceneNode() {
     val primaryResource: String? get() = resources.firstOrNull()
   }
+
+  /** Complication container rendering slot bounds, offline AuraClock data, and tap navigation. */
+  data class ComplicationSlot(
+    val slotId: String,
+    val displayName: String,
+    override val x: Float,
+    override val y: Float,
+    override val width: Float,
+    override val height: Float,
+    override val pivotX: Float = 0.5f,
+    override val pivotY: Float = 0.5f,
+    override val angle: Float = 0f,
+    override val scaleX: Float = 1f,
+    override val scaleY: Float = 1f,
+    override val alpha: Int = 255,
+    override val visible: Boolean = true,
+    val supportedTypes: List<String>,
+    val isCustomizable: Boolean = true,
+    val boundingShape: WffBoundingShape,
+    val defaultProviderPolicy: WffDefaultProviderPolicy? = null,
+    val templates: List<WffComplicationTemplate> = emptyList(),
+    override val transforms: List<WffTransform> = emptyList(),
+    override val variants: List<WffVariant> = emptyList(),
+  ) : WffSceneNode()
 
   /** Text layer rendering static text, formatted Template+Parameter, custom TTF font, or BitmapFont glyphs. */
   data class PartText(
@@ -524,6 +555,16 @@ sealed class WffUserConfig {
   ) : WffUserConfig() {
     override val defaultValue: String get() = if (defaultBool) "TRUE" else "FALSE"
   }
+
+  /** User photo / photo-album personalization option declared via PhotosConfiguration. */
+  data class PhotosConfig(
+    override val id: String,
+    override val displayName: String,
+    val photosType: WffPhotosType,
+    val maxPhotos: Int = 10,
+  ) : WffUserConfig() {
+    override val defaultValue: String get() = ""
+  }
 }
 
 /** Single element or resource status entry in a WFF compatibility report. */
@@ -539,10 +580,11 @@ data class WffSkippedItem(
   val reason: String,
 )
 
-/** Scored per-face compatibility report summarizing drawn, partly drawn, and skipped elements. */
+/** Scored per-face compatibility report summarizing drawn, partly drawn, skipped elements, and data source origins. */
 data class WffCompatibilityReport(
   val items: List<WffReportItem> = emptyList(),
   val missingResources: List<String> = emptyList(),
+  val dataSources: List<com.example.core.WffDataSourceInfo> = emptyList(),
 ) {
   val drawnElements: List<String>
     get() = items.filter { it.status == WffElementStatus.DRAWN }.map { it.element }
@@ -589,9 +631,14 @@ data class WffWatchFace(
   val sceneVariants: List<WffVariant> = emptyList(),
   val nodes: List<WffSceneNode>,
   val userConfigs: List<WffUserConfig> = emptyList(),
+  val flavors: WffFlavorSet? = null,
   val bitmapFonts: Map<String, WffBitmapFont> = emptyMap(),
   val metadata: Map<String, String> = emptyMap(),
+  val stringResources: Map<String, String> = emptyMap(),
+  val localizationCalendar: String? = null,
+  val localizationLocales: String? = null,
   val referencedResources: Set<String> = emptySet(),
   val referencedFonts: Set<String> = emptySet(),
+  val usedSources: Set<String> = emptySet(),
   val report: WffCompatibilityReport = WffCompatibilityReport(),
 )

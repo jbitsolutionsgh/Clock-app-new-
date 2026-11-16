@@ -113,10 +113,33 @@ private fun AuraClockRoot() {
   var currentTab by rememberSaveable { mutableStateOf(AppTab.TIMER) }
   var showStandByPreview by rememberSaveable { mutableStateOf(false) }
   var isTimerFullScreen by rememberSaveable { mutableStateOf(prefs.timerFullScreenByDefault.value) }
+  var openDiagnosticsRequest by rememberSaveable { mutableStateOf(false) }
 
   val configuration = LocalConfiguration.current
   val useRail = configuration.screenWidthDp > configuration.screenHeightDp && configuration.screenWidthDp >= 600
   val immersiveTimer = !showStandByPreview && currentTab == AppTab.TIMER && isTimerFullScreen
+
+  LaunchedEffect(Unit) {
+    CoreSingletons.tabRequests.collect { target ->
+      when (target) {
+        com.example.core.AppTabTarget.TIMER -> {
+          currentTab = AppTab.TIMER
+          isTimerFullScreen = prefs.timerFullScreenByDefault.value
+        }
+        com.example.core.AppTabTarget.CLOCK -> currentTab = AppTab.CLOCK
+        com.example.core.AppTabTarget.STOPWATCH -> currentTab = AppTab.STOPWATCH
+        com.example.core.AppTabTarget.SETTINGS,
+        com.example.core.AppTabTarget.SETTINGS_CALENDAR -> {
+          openDiagnosticsRequest = false
+          currentTab = AppTab.SETTINGS
+        }
+        com.example.core.AppTabTarget.DIAGNOSTICS -> {
+          openDiagnosticsRequest = true
+          currentTab = AppTab.SETTINGS
+        }
+      }
+    }
+  }
 
   // Sync Android system bars with full-screen state and always restore on leave or ON_STOP.
   LaunchedEffect(immersiveTimer, view) {
@@ -218,7 +241,11 @@ private fun AuraClockRoot() {
           )
           AppTab.CLOCK -> FacesChiplet.Screen()
           AppTab.STOPWATCH -> StopwatchChiplet.Screen()
-          AppTab.SETTINGS -> SettingsScreen(onPreviewStandBy = { showStandByPreview = true })
+          AppTab.SETTINGS -> SettingsScreen(
+            onPreviewStandBy = { showStandByPreview = true },
+            openDiagnosticsRequest = openDiagnosticsRequest,
+            onDiagnosticsRequestHandled = { openDiagnosticsRequest = false },
+          )
         }
       }
     }

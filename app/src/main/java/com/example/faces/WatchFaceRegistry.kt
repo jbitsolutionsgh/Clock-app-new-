@@ -315,6 +315,13 @@ internal object WatchFaceRegistry {
     _facesFlow.value = buildFaceList(stored)
     FaceAssetRepository.updateWffDiagnostics(
       stored.map { entry ->
+        val sensorDiag = CoreSingletons.sensorSource(appCtx).diagnostics.value
+        val compMap = CoreSingletons.prefs(appCtx).getWffComplicationProviders(entry.id)
+        val provenance = com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(
+          face = entry.face,
+          sensorDiag = sensorDiag,
+          savedComplicationIds = compMap,
+        )
         WffCompatibilitySummary(
           id = entry.id,
           name = entry.displayName,
@@ -324,6 +331,7 @@ internal object WatchFaceRegistry {
           skippedCount = entry.report.skippedCount,
           partlyDrawnItems = entry.report.partlyDrawnItems.map { WffSkippedDiagnostic(it.element, it.reason) },
           skippedItems = entry.report.skippedItems.map { WffSkippedDiagnostic(it.element, it.reason) },
+          dataSources = provenance,
         )
       },
     )
@@ -332,6 +340,20 @@ internal object WatchFaceRegistry {
   /** Imports a WFF file or archive and updates the registry when successful. */
   fun importWff(context: Context, uri: android.net.Uri): WffImportResult {
     val result = WffStorageManager.importFromUri(context.applicationContext, uri)
+    if (result is WffImportResult.Success) {
+      reloadWff(context)
+    }
+    return result
+  }
+
+  /** Replaces an existing duplicate WFF watch face from a staged file and reloads the registry. */
+  fun replaceWff(
+    context: Context,
+    stagedFile: java.io.File,
+    sourceFileName: String,
+    targetFaceId: String,
+  ): WffImportResult {
+    val result = WffStorageManager.replaceImportedFace(context.applicationContext, stagedFile, sourceFileName, targetFaceId)
     if (result is WffImportResult.Success) {
       reloadWff(context)
     }

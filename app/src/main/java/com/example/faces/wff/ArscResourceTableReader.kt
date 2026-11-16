@@ -28,7 +28,21 @@ internal object ArscResourceTableReader {
    * Parses [arscBytes] and returns a map of resource entry key name (e.g. "hand_hour")
    * to the best matching archive relative path (e.g. "res/ab.webp").
    */
-  fun readDrawableResourcePaths(arscBytes: ByteArray): Map<String, String> {
+  fun readDrawableResourcePaths(arscBytes: ByteArray): Map<String, String> =
+    readTypedStrings(arscBytes, setOf("drawable", "mipmap", "font"), Locale.getDefault(), scoreAsPath = true)
+
+  /**
+   * Parses [arscBytes] for "string" entries matching [locale] (falling back to default config).
+   */
+  fun readStrings(arscBytes: ByteArray, locale: Locale = Locale.getDefault()): Map<String, String> =
+    readTypedStrings(arscBytes, setOf("string"), locale, scoreAsPath = false)
+
+  private fun readTypedStrings(
+    arscBytes: ByteArray,
+    targetTypes: Set<String>,
+    locale: Locale,
+    scoreAsPath: Boolean,
+  ): Map<String, String> {
     if (arscBytes.size < 12) return emptyMap()
     return runCatching {
       val buf = ByteBuffer.wrap(arscBytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -40,6 +54,7 @@ internal object ArscResourceTableReader {
 
       var globalStrings = emptyList<String>()
       val result = LinkedHashMap<String, String>()
+      val scores = HashMap<String, Int>()
 
       var pos = rootHeaderSize
       while (pos + 8 <= rootSize) {
@@ -59,8 +74,12 @@ internal object ArscResourceTableReader {
               pkgStart = pos,
               pkgHeaderSize = chunkHeaderSize,
               pkgEnd = pos + chunkSize,
+              targetTypes = targetTypes,
+              locale = locale,
+              scoreAsPath = scoreAsPath,
               globalStrings = globalStrings,
               out = result,
+              scores = scores,
             )
           }
         }
@@ -76,8 +95,12 @@ internal object ArscResourceTableReader {
     pkgStart: Int,
     pkgHeaderSize: Int,
     pkgEnd: Int,
+    targetTypes: Set<String>,
+    locale: Locale,
+    scoreAsPath: Boolean,
     globalStrings: List<String>,
     out: MutableMap<String, String>,
+    scores: MutableMap<String, Int>,
   ) {
     if (pkgStart + 284 > pkgEnd || pkgHeaderSize < 284) return
     val typeStringsOffset = buf.getInt(pkgStart + 268)
@@ -99,21 +122,67 @@ internal object ArscResourceTableReader {
       if (chunkType == RES_TABLE_TYPE_TYPE && chunkHeaderSize >= 20) {
         val typeId = bytes[pos + 8].toInt() and 0xFF
         val typeName = typeNames.getOrNull(typeId - 1)?.lowercase(Locale.US)
-        if (typeName == "drawable" || typeName == "mipmap" || typeName == "font") {
-          readTypeChunk(
-            buf = buf,
-            bytes = bytes,
-            typeStart = pos,
-            typeHeaderSize = chunkHeaderSize,
-            typeEnd = pos + chunkSize,
-            keyNames = keyNames,
-            globalStrings = globalStrings,
-            out = out,
-          )
+        if (typeName in targetTypes) {
+          val configScore = if (scoreAsPath) 1 else readConfigLocaleScore(buf, bytes, pos, chunkHeaderSize, locale)
+          if (configScore >= 0) {
+            readTypeChunk(
+              buf = buf,
+              bytes = bytes,
+              typeStart = pos,
+              typeHeaderSize = chunkHeaderSize,
+              typeEnd = pos + chunkSize,
+              configScore = configScore,
+              scoreAsPath = scoreAsPath,
+              keyNames = keyNames,
+              globalStrings = globalStrings,
+              out = out,
+              scores = scores,
+            )
+          }
         }
       }
       pos += chunkSize
     }
+  }
+
+  private fun readConfigLocaleScore(
+    buf: ByteBuffer,
+    bytes: ByteArray,
+    typeStart: Int,
+    typeHeaderSize: Int,
+    locale: Locale,
+  ): Int {
+    if (typeHeaderSize < 24) return 10
+    val configSize = buf.getInt(typeStart + 20)
+    if (configSize < 8 || typeHeaderSize < 28) return 10
+    val lang = decodeLocaleField(bytes[typeStart + 24], bytes[typeStart + 25], isCountry = false)
+    val country = decodeLocaleField(bytes[typeStart + 26], bytes[typeStart + 27], isCountry = true)
+    val targetLang = locale.language.lowercase(Locale.US)
+    val targetCountry = locale.country.uppercase(Locale.US)
+    return when {
+      lang.isEmpty() && country.isEmpty() -> 10
+      lang.equals(targetLang, ignoreCase = true) && country.equals(targetCountry, ignoreCase = true) && targetCountry.isNotEmpty() -> 30
+      lang.equals(targetLang, ignoreCase = true) && country.isEmpty() -> 20
+      lang.equals(targetLang, ignoreCase = true) -> 5
+      else -> -1
+    }
+  }
+
+  private fun decodeLocaleField(b0: Byte, b1: Byte, isCountry: Boolean): String {
+    val u0 = b0.toInt() and 0xFF
+    val u1 = b1.toInt() and 0xFF
+    if (u0 == 0 && u1 == 0) return ""
+    if ((u0 and 0x80) == 0) {
+      val c0 = u0.toChar()
+      val c1 = u1.toChar()
+      return if (c0.isLetterOrDigit() && c1.isLetterOrDigit()) "$c0$c1" else ""
+    }
+    // Packed 3-letter ISO code inside 2 bytes.
+    val base = if (isCountry) '0'.code else 'a'.code
+    val first = ((u0 shr 2) and 0x1F) + base
+    val second = (((u0 and 0x03) shl 3) or ((u1 shr 5) and 0x07)) + base
+    val third = (u1 and 0x1F) + base
+    return String(charArrayOf(first.toChar(), second.toChar(), third.toChar()))
   }
 
   private fun readTypeChunk(
@@ -122,9 +191,12 @@ internal object ArscResourceTableReader {
     typeStart: Int,
     typeHeaderSize: Int,
     typeEnd: Int,
+    configScore: Int,
+    scoreAsPath: Boolean,
     keyNames: List<String>,
     globalStrings: List<String>,
     out: MutableMap<String, String>,
+    scores: MutableMap<String, Int>,
   ) {
     val flags = bytes[typeStart + 9].toInt() and 0xFF
     val entryCount = buf.getInt(typeStart + 12).coerceAtLeast(0)
@@ -183,11 +255,19 @@ internal object ArscResourceTableReader {
 
       if (dataType == VALUE_TYPE_STRING) {
         val key = keyNames.getOrNull(keyIdx) ?: continue
-        val path = globalStrings.getOrNull(dataVal) ?: continue
-        if (path.isNotBlank()) {
-          val existing = out[key]
-          if (existing == null || scorePath(path) > scorePath(existing)) {
-            out[key] = path
+        val text = globalStrings.getOrNull(dataVal) ?: continue
+        if (scoreAsPath) {
+          if (text.isNotBlank()) {
+            val sc = scorePath(text)
+            if (sc > (scores[key] ?: -1)) {
+              scores[key] = sc
+              out[key] = text
+            }
+          }
+        } else {
+          if (configScore > (scores[key] ?: -1)) {
+            scores[key] = configScore
+            out[key] = text
           }
         }
       }

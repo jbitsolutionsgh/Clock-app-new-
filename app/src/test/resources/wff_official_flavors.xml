@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Flavors Official" />
+  <UserConfigurations>
+    <ColorConfiguration id="accent" displayName="Accent" defaultValue="amber">
+      <ColorOption id="amber" displayName="Amber" colors="#FFF59E0B" />
+      <ColorOption id="teal" displayName="Teal" colors="#FF14B8A6" />
+    </ColorConfiguration>
+    <BooleanConfiguration id="show_seconds" displayName="Show Seconds" defaultValue="TRUE" />
+    <Flavors defaultValue="class_focus">
+      <Flavor id="class_focus" displayName="Classroom Focus">
+        <Configuration id="accent" optionId="amber" />
+        <Configuration id="show_seconds" optionId="TRUE" />
+        <ComplicationSlot slotId="slot_top">
+          <DefaultProviderPolicy defaultSystemProvider="TIMER" defaultSystemProviderType="RANGED_VALUE" />
+        </ComplicationSlot>
+      </Flavor>
+      <Flavor id="clean_night" displayName="Night Clean">
+        <Configuration id="accent" optionId="teal" />
+        <Configuration id="show_seconds" optionId="FALSE" />
+        <ComplicationSlot slotId="slot_top">
+          <DefaultProviderPolicy defaultSystemProvider="WATCH_BATTERY" defaultSystemProviderType="SHORT_TEXT" />
+        </ComplicationSlot>
+      </Flavor>
+    </Flavors>
+  </UserConfigurations>
+  <Scene backgroundColor="#FF000000">
+    <PartDraw x="20" y="20" width="410" height="410">
+      <Ellipse x="0" y="0" width="410" height="410">
+        <Stroke color="[CONFIGURATION.accent.0]" thickness="6" />
+      </Ellipse>
+    </PartDraw>
+    <Condition>
+      <Expressions>
+        <Expression name="secOn">[CONFIGURATION.show_seconds] == 1</Expression>
+      </Expressions>
+      <Compare expression="secOn">
+        <DigitalClock x="75" y="180" width="300" height="90">
+          <TimeText format="HH:mm:ss" hourFormat="24" align="CENTER" x="0" y="0" width="300" height="90">
+            <Font family="SYNC_TO_DEVICE" size="56" color="[CONFIGURATION.accent.0]" />
+          </TimeText>
+        </DigitalClock>
+      </Compare>
+      <Default>
+        <DigitalClock x="75" y="180" width="300" height="90">
+          <TimeText format="HH:mm" hourFormat="24" align="CENTER" x="0" y="0" width="300" height="90">
+            <Font family="SYNC_TO_DEVICE" size="56" color="[CONFIGURATION.accent.0]" />
+          </TimeText>
+        </DigitalClock>
+      </Default>
+    </Condition>
+    <ComplicationSlot slotId="slot_top" displayName="Top Slot" x="150" y="65" width="150" height="90" supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+      <DefaultProviderPolicy defaultSystemProvider="TIMER" defaultSystemProviderType="RANGED_VALUE" />
+      <BoundingRoundBox x="0" y="0" width="150" height="90" cornerRadiusX="16" cornerRadiusY="16" />
+    </ComplicationSlot>
+  </Scene>
+</WatchFace>

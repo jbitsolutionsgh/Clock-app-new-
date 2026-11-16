@@ -75,6 +75,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
   var statusIsError by remember { mutableStateOf(false) }
   var detailsFace by remember { mutableStateOf<WffStoredFace?>(null) }
   var customizeFace by remember { mutableStateOf<WffStoredFace?>(null) }
+  var duplicateFound by remember { mutableStateOf<WffImportResult.DuplicateFound?>(null) }
 
   val importLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.OpenDocument(),
@@ -87,6 +88,9 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
           statusIsError = false
           val score = entry.report.scorePercent
           statusMessage = "Imported \"${entry.displayName}\" ($score% compatibility)."
+        }
+        is WffImportResult.DuplicateFound -> {
+          duplicateFound = result
         }
         is WffImportResult.Error -> {
           statusIsError = true
@@ -218,7 +222,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
                 color = if (skipCount == 0 && partlyCount == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
               )
             }
-            if (entry.face.userConfigs.isNotEmpty()) {
+            if (com.example.faces.wff.WffFace.hasCustomizableOptions(entry.face)) {
               IconButton(
                 onClick = { customizeFace = entry },
                 modifier = Modifier.testTag("wff_customize_button_${entry.id}"),
@@ -289,6 +293,37 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
               Text("$k: $v", style = MaterialTheme.typography.bodySmall, color = Color.White)
             }
           }
+          val sensorDiag = remember(entry.id) { CoreSingletons.sensorSource(context).diagnostics.value }
+          val compMap = remember(entry.id) { prefs.getWffComplicationProviders(entry.id) }
+          val dataSources = remember(entry.id, sensorDiag, compMap) {
+            com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(entry.face, sensorDiag, compMap)
+          }
+          if (dataSources.isNotEmpty()) {
+            Text(
+              text = "Data sources",
+              style = MaterialTheme.typography.titleSmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            dataSources.forEach { ds ->
+              val originColor = when (ds.origin) {
+                com.example.core.WffDataSourceOrigin.REAL_SENSOR -> Color(0xFF10B981)
+                com.example.core.WffDataSourceOrigin.AURACLOCK_DATA -> MaterialTheme.colorScheme.primary
+                com.example.core.WffDataSourceOrigin.NO_DATA -> Color(0xFFF59E0B)
+              }
+              Text(
+                text = "• ${ds.source}: ${ds.origin.label} (${ds.detail})",
+                style = MaterialTheme.typography.bodySmall,
+                color = originColor,
+              )
+            }
+          }
+          if (entry.face.localizationCalendar != null || entry.face.localizationLocales != null) {
+            Text(
+              text = "Localization: ${entry.face.localizationCalendar ?: "GREGORIAN"} ${entry.face.localizationLocales.orEmpty()}".trim(),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
           Text(
             text = "Drawn (${entry.report.drawnCount})",
             style = MaterialTheme.typography.titleSmall,
@@ -337,6 +372,55 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
       confirmButton = {
         TextButton(onClick = { detailsFace = null }) {
           Text("Close")
+        }
+      },
+    )
+  }
+
+  duplicateFound?.let { dup ->
+    AlertDialog(
+      onDismissRequest = {
+        com.example.faces.wff.WffStorageManager.cancelStagedImport(dup.stagedFile)
+        duplicateFound = null
+      },
+      modifier = Modifier.testTag("wff_duplicate_dialog"),
+      title = { Text("Watch face already imported") },
+      text = {
+        Text(
+          "\"${dup.existingFace.displayName}\" (${dup.existingFace.sourceFileName}) matches this watch face. Replace the existing copy or cancel?",
+        )
+      },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            when (val res = WatchFaceRegistry.replaceWff(context, dup.stagedFile, dup.sourceFileName, dup.existingFace.id)) {
+              is WffImportResult.Success -> {
+                prefs.setSelectedFaceId(res.entry.id)
+                statusIsError = false
+                statusMessage = "Replaced \"${res.entry.displayName}\" (${res.entry.report.scorePercent}% compatibility)."
+              }
+              is WffImportResult.Error -> {
+                statusIsError = true
+                statusMessage = res.reason
+              }
+              is WffImportResult.DuplicateFound -> Unit
+            }
+            duplicateFound = null
+          },
+          modifier = Modifier.testTag("wff_duplicate_replace_button"),
+        ) {
+          Text("Replace")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = {
+            com.example.faces.wff.WffStorageManager.cancelStagedImport(dup.stagedFile)
+            duplicateFound = null
+          },
+          modifier = Modifier.testTag("wff_duplicate_cancel_button"),
+        ) {
+          Text("Cancel")
         }
       },
     )

@@ -18,6 +18,12 @@ object CoreSingletons {
   private var faceDataSourceInstance: FaceDataSource? = null
 
   @Volatile
+  private var sensorSourceInstance: FaceSensorSource? = null
+
+  private val _tabRequests = kotlinx.coroutines.flow.MutableSharedFlow<AppTabTarget>(extraBufferCapacity = 4)
+  val tabRequests: kotlinx.coroutines.flow.SharedFlow<AppTabTarget> = _tabRequests
+
+  @Volatile
   var timerController: TimerController? = null
 
   @Volatile
@@ -41,6 +47,11 @@ object CoreSingletons {
   @Volatile
   var faceDiagnosticsProvider: FaceDiagnosticsProvider? = null
 
+  /** Requests MainActivity to switch tabs (e.g. when tapping a complication slot). */
+  fun requestTab(target: AppTabTarget) {
+    _tabRequests.tryEmit(target)
+  }
+
   /** Returns the single shared AuraPrefs instance. */
   fun prefs(context: Context): AuraPrefs =
     prefsInstance ?: synchronized(this) {
@@ -59,5 +70,14 @@ object CoreSingletons {
       faceDataSourceInstance ?: CoreFaceDataSource(context.applicationContext).also {
         faceDataSourceInstance = it
       }
+    }
+
+  /** Returns the single shared FaceSensorSource instance. */
+  fun sensorSource(context: Context): FaceSensorSource =
+    sensorSourceInstance ?: synchronized(this) {
+      sensorSourceInstance ?: CoreFaceSensorSource(
+        context = context.applicationContext,
+        prefs = prefs(context),
+      ).also { sensorSourceInstance = it }
     }
 }
