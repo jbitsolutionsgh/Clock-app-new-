@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -46,6 +47,7 @@ import com.example.core.CoreSingletons
 import com.example.core.CrashCatcher
 import com.example.core.EarbudController
 import com.example.core.EarbudDiagnostics
+import com.example.core.StandByDiagnostics
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -140,6 +142,13 @@ object EarbudChiplet {
     val ttsReady by speaker.isReady.collectAsStateWithLifecycle()
     val ttsStatus by speaker.statusMessage.collectAsStateWithLifecycle()
     val hasCrash = remember { CrashCatcher.hasCrashLog(context) }
+    val standByProvider = remember { CoreSingletons.standByDiagnosticsProvider }
+    val standByDiag by (standByProvider?.diagnostics
+      ?: remember { MutableStateFlow(StandByDiagnostics()) }).collectAsStateWithLifecycle()
+
+    LaunchedEffect(standByProvider) {
+      standByProvider?.refreshNow()
+    }
 
     Column(
       modifier = modifier
@@ -225,6 +234,49 @@ object EarbudChiplet {
         Icon(Icons.Default.RecordVoiceOver, contentDescription = null)
         Spacer(modifier = Modifier.width(10.dp))
         Text("Speak time now", fontWeight = FontWeight.Bold)
+      }
+
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Stand By Calendar",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Text(
+            text = if (standByDiag.calendarPermissionGranted) "Permission: Granted" else "Permission: Not granted",
+            style = MaterialTheme.typography.titleLarge,
+            color = if (standByDiag.calendarPermissionGranted) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("diag_calendar_permission"),
+          )
+          Text(
+            text = "Calendars found: ${standByDiag.calendarsFoundCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_calendar_count"),
+          )
+          Text(
+            text = "Events in window: ${standByDiag.eventsFoundCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_calendar_events"),
+          )
+          Text(
+            text = "Last refresh: ${standByDiag.lastRefreshTimeLabel}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_calendar_refresh"),
+          )
+        }
       }
 
       Surface(

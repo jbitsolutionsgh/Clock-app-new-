@@ -98,3 +98,29 @@ fun interface StandByClockRenderer {
   @androidx.compose.runtime.Composable
   fun Render(useSelectedFace: Boolean, modifier: androidx.compose.ui.Modifier)
 }
+
+/** Supported lookahead windows for Stand By calendar events. */
+enum class StandByCalendarWindow(val id: String, val label: String) {
+  TODAY_ONLY("today", "Today only"),
+  TODAY_AND_TOMORROW("today_tomorrow", "Today and tomorrow"),
+  NEXT_7_DAYS("next_7_days", "Next 7 days");
+
+  companion object {
+    /** Finds a window by persisted ID, defaulting to Today and tomorrow. */
+    fun fromId(id: String?): StandByCalendarWindow =
+      entries.firstOrNull { it.id == id } ?: TODAY_AND_TOMORROW
+  }
+}
+
+data class StandByDiagnostics(
+  val calendarPermissionGranted: Boolean = false,
+  val calendarsFoundCount: Int = 0,
+  val eventsFoundCount: Int = 0,
+  val lastRefreshTimeLabel: String = "Never",
+)
+
+/** Public contract in core so DiagnosticsScreen can read Stand By calendar status without importing standby. */
+interface StandByDiagnosticsProvider {
+  val diagnostics: StateFlow<StandByDiagnostics>
+  fun refreshNow()
+}

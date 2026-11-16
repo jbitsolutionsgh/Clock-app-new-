@@ -72,6 +72,23 @@ class AuraPrefs(context: Context) {
   private val _standByDimLevel = MutableStateFlow(prefs.getFloat(KEY_STANDBY_DIM, 0.35f).coerceIn(0.1f, 1.0f))
   val standByDimLevel: StateFlow<Float> = _standByDimLevel.asStateFlow()
 
+  private val _standByCalendarEnabled = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_CAL_ENABLED, true))
+  val standByCalendarEnabled: StateFlow<Boolean> = _standByCalendarEnabled.asStateFlow()
+
+  private val _selectedCalendarIds = MutableStateFlow(loadSelectedCalendarIds())
+  val selectedCalendarIds: StateFlow<Set<Long>> = _selectedCalendarIds.asStateFlow()
+
+  private val _standByMaxEvents = MutableStateFlow(prefs.getInt(KEY_STANDBY_MAX_EVENTS, 4).coerceIn(2, 6))
+  val standByMaxEvents: StateFlow<Int> = _standByMaxEvents.asStateFlow()
+
+  private val _standByCalendarWindow = MutableStateFlow(
+    StandByCalendarWindow.fromId(prefs.getString(KEY_STANDBY_CAL_WINDOW, StandByCalendarWindow.TODAY_AND_TOMORROW.id)),
+  )
+  val standByCalendarWindow: StateFlow<StandByCalendarWindow> = _standByCalendarWindow.asStateFlow()
+
+  private val _standByShowEventTitles = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_SHOW_TITLES, true))
+  val standByShowEventTitles: StateFlow<Boolean> = _standByShowEventTitles.asStateFlow()
+
   private fun loadThemeColor(): AuraThemeColor =
     AuraThemeColor.fromId(prefs.getString(KEY_THEME_COLOR, AuraThemeColor.COBALT.id))
 
@@ -201,6 +218,50 @@ class AuraPrefs(context: Context) {
     _standByDimLevel.value = clamped
   }
 
+  private fun loadSelectedCalendarIds(): Set<Long> =
+    prefs.getStringSet(KEY_STANDBY_CAL_IDS, emptySet())
+      ?.mapNotNull { it.toLongOrNull() }
+      ?.toSet()
+      ?: emptySet()
+
+  /** Returns true once default Google calendar selection has been initialized. */
+  fun hasInitializedCalendarSelection(): Boolean =
+    prefs.getBoolean(KEY_STANDBY_CAL_INITIALIZED, false)
+
+  /** Enables or disables the Stand By calendar event list. */
+  fun setStandByCalendarEnabled(enabled: Boolean) {
+    prefs.edit().putBoolean(KEY_STANDBY_CAL_ENABLED, enabled).apply()
+    _standByCalendarEnabled.value = enabled
+  }
+
+  /** Persists the set of selected device calendar IDs and marks initialization complete. */
+  fun setSelectedCalendarIds(ids: Set<Long>) {
+    prefs.edit()
+      .putStringSet(KEY_STANDBY_CAL_IDS, ids.map { it.toString() }.toSet())
+      .putBoolean(KEY_STANDBY_CAL_INITIALIZED, true)
+      .apply()
+    _selectedCalendarIds.value = ids
+  }
+
+  /** Sets the maximum number of calendar events shown on Stand By (2 to 6). */
+  fun setStandByMaxEvents(count: Int) {
+    val clamped = count.coerceIn(2, 6)
+    prefs.edit().putInt(KEY_STANDBY_MAX_EVENTS, clamped).apply()
+    _standByMaxEvents.value = clamped
+  }
+
+  /** Sets the Stand By calendar lookahead window. */
+  fun setStandByCalendarWindow(window: StandByCalendarWindow) {
+    prefs.edit().putString(KEY_STANDBY_CAL_WINDOW, window.id).apply()
+    _standByCalendarWindow.value = window
+  }
+
+  /** Sets whether event titles are shown or hidden behind "Event". */
+  fun setStandByShowEventTitles(show: Boolean) {
+    prefs.edit().putBoolean(KEY_STANDBY_SHOW_TITLES, show).apply()
+    _standByShowEventTitles.value = show
+  }
+
   /** Saves widget configuration for a specific appWidgetId. */
   fun saveWidgetConfig(widgetId: Int, styleId: String, colorId: String) {
     prefs.edit()
@@ -254,5 +315,11 @@ class AuraPrefs(context: Context) {
     private const val KEY_ACTION_PREVIOUS = "action_previous"
     private const val KEY_STANDBY_USE_SELECTED = "standby_use_selected"
     private const val KEY_STANDBY_DIM = "standby_dim"
+    private const val KEY_STANDBY_CAL_ENABLED = "standby_cal_enabled"
+    private const val KEY_STANDBY_CAL_IDS = "standby_cal_ids"
+    private const val KEY_STANDBY_CAL_INITIALIZED = "standby_cal_initialized"
+    private const val KEY_STANDBY_MAX_EVENTS = "standby_max_events"
+    private const val KEY_STANDBY_CAL_WINDOW = "standby_cal_window"
+    private const val KEY_STANDBY_SHOW_TITLES = "standby_show_titles"
   }
 }

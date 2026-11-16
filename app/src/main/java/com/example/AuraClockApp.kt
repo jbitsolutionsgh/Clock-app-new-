@@ -5,6 +5,7 @@ import com.example.core.CoreSingletons
 import com.example.core.CrashCatcher
 import com.example.earbud.EarbudChiplet
 import com.example.faces.FacesChiplet
+import com.example.standby.StandByChiplet
 import com.example.stopwatch.StopwatchChiplet
 import com.example.timer.TimerChiplet
 
@@ -22,5 +23,6 @@ class AuraClockApp : Application() {
     StopwatchChiplet.ensureInitialized()
     FacesChiplet.ensureInitialized(this)
     EarbudChiplet.ensureInitialized(this).ensureStarted()
+    StandByChiplet.ensureInitialized(this)
   }
 }

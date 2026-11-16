@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.CoreSingletons
 import com.example.earbud.EarbudChiplet
 import com.example.faces.FacesChiplet
+import com.example.standby.StandByChiplet
 import com.example.stopwatch.StopwatchChiplet
 import com.example.timer.TimerChiplet
 import com.example.ui.theme.AuraClockTheme
@@ -93,8 +94,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AuraClockRoot() {
   var currentTab by rememberSaveable { mutableStateOf(AppTab.TIMER) }
+  var showStandByPreview by rememberSaveable { mutableStateOf(false) }
   val configuration = LocalConfiguration.current
   val useRail = configuration.screenWidthDp > configuration.screenHeightDp && configuration.screenWidthDp >= 600
+
+  if (showStandByPreview) {
+    StandByChiplet.PreviewScreen(
+      onExit = { showStandByPreview = false },
+      modifier = Modifier.fillMaxSize(),
+    )
+    return
+  }
 
   Scaffold(
     containerColor = OledBlack,
@@ -158,7 +168,7 @@ private fun AuraClockRoot() {
           AppTab.TIMER -> TimerChiplet.Screen()
           AppTab.CLOCK -> FacesChiplet.Screen()
           AppTab.STOPWATCH -> StopwatchChiplet.Screen()
-          AppTab.SETTINGS -> SettingsScreen()
+          AppTab.SETTINGS -> SettingsScreen(onPreviewStandBy = { showStandByPreview = true })
         }
       }
     }

@@ -35,7 +35,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.BatterySaver
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Headphones
@@ -70,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
 import com.example.earbud.EarbudChiplet
+import com.example.standby.StandByChiplet
 import com.example.timer.TimerChiplet
 import com.example.ui.theme.OledBlack
 import kotlin.math.roundToInt
@@ -87,7 +87,10 @@ private enum class ActionSlot(val title: String) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier) {
+fun SettingsScreen(
+  onPreviewStandBy: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
   val context = LocalContext.current
   val prefs = remember { CoreSingletons.prefs(context) }
   val earbudController = remember { EarbudChiplet.ensureInitialized(context) }
@@ -113,9 +116,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
   val playPauseDoubleAction by prefs.playPauseDoubleActionId.collectAsStateWithLifecycle()
   val nextAction by prefs.nextActionId.collectAsStateWithLifecycle()
   val previousAction by prefs.previousActionId.collectAsStateWithLifecycle()
-
-  val standByUseSelected by prefs.standByUseSelectedFace.collectAsStateWithLifecycle()
-  val standByDim by prefs.standByDimLevel.collectAsStateWithLifecycle()
 
   var editingActionSlot by remember { mutableStateOf<ActionSlot?>(null) }
 
@@ -371,47 +371,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
       }
     }
 
-    // 4. Stand By Screensaver
-    SettingsCard(title = "Stand By Screensaver", icon = Icons.Default.Bedtime) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("Mirror active watch face", style = MaterialTheme.typography.titleMedium)
-          Text(
-            text = if (standByUseSelected) "Uses active Clock face" else "Uses Big Stand By Digital",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        Switch(
-          checked = standByUseSelected,
-          onCheckedChange = { prefs.setStandByUseSelectedFace(it) },
-          modifier = Modifier.testTag("settings_standby_mirror_switch"),
-        )
-      }
-
-      Text(
-        text = "Night brightness: ${(standByDim * 100).roundToInt()}%",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Slider(
-        value = standByDim,
-        onValueChange = { prefs.setStandByDimLevel(it) },
-        valueRange = 0.15f..1.0f,
-        modifier = Modifier.testTag("settings_standby_dim_slider"),
-      )
-
-      OutlinedButton(
-        onClick = { openDreamSettings(context) },
-        modifier = Modifier.fillMaxWidth().testTag("settings_open_screensaver"),
-      ) {
-        Text("Open system screensaver settings")
-      }
-    }
+    // 4. Stand By Screensaver & Calendar (owned by standby chiplet)
+    StandByChiplet.SettingsSection(onOpenPreview = onPreviewStandBy)
 
     // 5. Diagnostics Entry
     Surface(
@@ -570,16 +531,6 @@ private fun openBatteryOptimizationRequest(context: Context) {
   }.onFailure {
     runCatching {
       context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-    }
-  }
-}
-
-private fun openDreamSettings(context: Context) {
-  runCatching {
-    context.startActivity(Intent(Settings.ACTION_DREAM_SETTINGS))
-  }.onFailure {
-    runCatching {
-      context.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
     }
   }
 }

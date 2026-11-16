@@ -29,6 +29,9 @@ object CoreSingletons {
   @Volatile
   var standByClockRenderer: StandByClockRenderer? = null
 
+  @Volatile
+  var standByDiagnosticsProvider: StandByDiagnosticsProvider? = null
+
   /** Returns the single shared AuraPrefs instance. */
   fun prefs(context: Context): AuraPrefs =
     prefsInstance ?: synchronized(this) {
