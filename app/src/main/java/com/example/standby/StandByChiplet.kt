@@ -80,6 +80,7 @@ object StandByChiplet {
       ).also {
         coordinatorInstance = it
         CoreSingletons.standByDiagnosticsProvider = it
+        CoreSingletons.nextEventSource = it
       }
     }
   }

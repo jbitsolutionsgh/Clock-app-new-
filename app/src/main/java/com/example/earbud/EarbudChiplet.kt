@@ -47,6 +47,7 @@ import com.example.core.CoreSingletons
 import com.example.core.CrashCatcher
 import com.example.core.EarbudController
 import com.example.core.EarbudDiagnostics
+import com.example.core.FaceEngineDiagnostics
 import com.example.core.StandByDiagnostics
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
@@ -145,6 +146,9 @@ object EarbudChiplet {
     val standByProvider = remember { CoreSingletons.standByDiagnosticsProvider }
     val standByDiag by (standByProvider?.diagnostics
       ?: remember { MutableStateFlow(StandByDiagnostics()) }).collectAsStateWithLifecycle()
+    val faceDiagProvider = remember { CoreSingletons.faceDiagnosticsProvider }
+    val faceDiag by (faceDiagProvider?.diagnostics
+      ?: remember { MutableStateFlow(FaceEngineDiagnostics()) }).collectAsStateWithLifecycle()
 
     LaunchedEffect(standByProvider) {
       standByProvider?.refreshNow()
@@ -288,6 +292,55 @@ object EarbudChiplet {
             color = Color.White,
             modifier = Modifier.testTag("diag_standby_events_shown"),
           )
+        }
+      }
+
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Watch Face Definitions",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Text(
+            text = "Loaded: ${faceDiag.loadedDefinitions.size}",
+            style = MaterialTheme.typography.titleLarge,
+            color = if (faceDiag.errors.isEmpty()) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("diag_face_defs_count"),
+          )
+          if (faceDiag.loadedDefinitions.isNotEmpty()) {
+            Text(
+              text = faceDiag.loadedDefinitions.joinToString(", ") { "${it.second} (${it.first})" },
+              style = MaterialTheme.typography.bodyMedium,
+              color = Color.White,
+              modifier = Modifier.testTag("diag_face_defs_list"),
+            )
+          }
+          if (faceDiag.errors.isEmpty()) {
+            Text(
+              text = "Errors: None",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("diag_face_defs_errors"),
+            )
+          } else {
+            faceDiag.errors.forEach { err ->
+              Text(
+                text = "Skipped ${err.fileName}: ${err.reason}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
         }
       }
 

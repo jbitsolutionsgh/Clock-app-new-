@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.AuraThemeColor
+import com.example.core.FaceRenderMode
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
 import com.example.ui.theme.SpaceGroteskFamily
@@ -46,6 +47,7 @@ internal class StandByDigitalFace : WatchFace {
     accent: AuraThemeColor,
     smoothSeconds: Boolean,
     modifier: Modifier,
+    renderMode: FaceRenderMode,
   ) {
     val t = timeProvider()
     val displayHour = when {
@@ -129,6 +131,7 @@ internal class MinimalAnalogFace : WatchFace {
     accent: AuraThemeColor,
     smoothSeconds: Boolean,
     modifier: Modifier,
+    renderMode: FaceRenderMode,
   ) {
     BoxWithConstraints(
       modifier = modifier

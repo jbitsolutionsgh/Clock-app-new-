@@ -45,6 +45,7 @@ import com.example.core.AuraPrefs
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
 import com.example.core.FaceNavigator
+import com.example.core.FaceRenderMode
 import com.example.ui.theme.OledBlack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -55,8 +56,9 @@ import kotlinx.coroutines.isActive
  */
 object FacesChiplet {
 
-  /** Registers the FaceNavigator singleton in CoreSingletons. */
+  /** Registers the FaceNavigator singleton and loads JSON watch face definitions. */
   fun ensureInitialized(context: Context): FaceNavigator {
+    WatchFaceRegistry.init(context.applicationContext)
     val existing = CoreSingletons.faceNavigator
     if (existing != null) return existing
     val prefs = CoreSingletons.prefs(context)
@@ -90,6 +92,7 @@ object FacesChiplet {
   @Composable
   fun Screen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    remember { WatchFaceRegistry.init(context) }
     val prefs = remember { CoreSingletons.prefs(context) }
     val selectedId by prefs.selectedFaceId.collectAsStateWithLifecycle()
     val accent by prefs.themeColor.collectAsStateWithLifecycle()
@@ -163,13 +166,15 @@ object FacesChiplet {
     }
   }
 
-  /** Renders a watch face for the Stand By screensaver (ticks once per real second to save battery). */
+  /** Renders a watch face for the Stand By screensaver in ambient mode. */
   @Composable
   fun StandByClockView(
     useSelectedFace: Boolean,
     prefs: AuraPrefs,
     modifier: Modifier = Modifier,
   ) {
+    val context = LocalContext.current
+    remember { WatchFaceRegistry.init(context) }
     val selectedId by prefs.selectedFaceId.collectAsStateWithLifecycle()
     val accent by prefs.themeColor.collectAsStateWithLifecycle()
     val face = remember(useSelectedFace, selectedId) {
@@ -180,26 +185,29 @@ object FacesChiplet {
       face = face,
       accent = accent,
       smoothSweep = false,
+      renderMode = FaceRenderMode.AMBIENT,
       modifier = modifier,
     )
   }
 }
 
 /**
- * Isolated stage that drives the clock tick loop only while lifecycle-RESUMED.
- * Recomputes only the clock face itself without recomposing surrounding selector UI.
+ * Isolated stage that drives the legacy clock tick loop only for non-engine faces while RESUMED.
+ * DefinitionFaces manage their own FaceDataSource lifecycle and updatePolicy (frame/second/minute).
  */
 @Composable
 private fun ClockFaceStage(
   face: WatchFace,
   accent: AuraThemeColor,
   smoothSweep: Boolean,
+  renderMode: FaceRenderMode = FaceRenderMode.NORMAL,
   modifier: Modifier = Modifier,
 ) {
   val lifecycleOwner = LocalLifecycleOwner.current
   var timeSnapshot by remember { mutableStateOf(ClockTimeSnapshot.now()) }
 
-  LaunchedEffect(lifecycleOwner, smoothSweep) {
+  LaunchedEffect(lifecycleOwner, smoothSweep, face.id, face.usesOwnDataLoop) {
+    if (face.usesOwnDataLoop) return@LaunchedEffect
     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
       if (smoothSweep) {
         while (isActive) {
@@ -227,6 +235,7 @@ private fun ClockFaceStage(
       accent = accent,
       smoothSeconds = smoothSweep,
       modifier = Modifier.fillMaxSize(),
+      renderMode = renderMode,
     )
   }
 }

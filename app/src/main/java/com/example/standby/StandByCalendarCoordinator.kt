@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.example.core.AuraPrefs
+import com.example.core.NextCalendarEvent
+import com.example.core.NextEventSource
 import com.example.core.StandByDiagnostics
 import com.example.core.StandByDiagnosticsProvider
 import kotlinx.coroutines.CoroutineScope
@@ -35,7 +37,7 @@ internal data class StandByCalendarSnapshot(
 internal class StandByCalendarCoordinator(
   context: Context,
   private val prefs: AuraPrefs,
-) : StandByDiagnosticsProvider {
+) : StandByDiagnosticsProvider, NextEventSource {
 
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -52,6 +54,9 @@ internal class StandByCalendarCoordinator(
   private val _diagnostics = MutableStateFlow(StandByDiagnostics())
   override val diagnostics: StateFlow<StandByDiagnostics> = _diagnostics.asStateFlow()
 
+  private val _nextEvent = MutableStateFlow<NextCalendarEvent?>(null)
+  override val nextEvent: StateFlow<NextCalendarEvent?> = _nextEvent.asStateFlow()
+
   /** Returns true if READ_CALENDAR permission is currently granted. */
   fun hasCalendarPermission(): Boolean =
     ContextCompat.checkSelfPermission(
@@ -62,6 +67,11 @@ internal class StandByCalendarCoordinator(
   /** Triggers an asynchronous refresh on a background dispatcher. */
   override fun refreshNow() {
     scope.launch { refreshSuspend() }
+  }
+
+  /** Refreshes upcoming events for core NextEventSource consumers. */
+  override fun refresh() {
+    refreshNow()
   }
 
   /** Records the timestamp when StandByDreamService started showing. */
@@ -80,6 +90,7 @@ internal class StandByCalendarCoordinator(
       val granted = hasCalendarPermission()
       if (!granted) {
         _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
+        _nextEvent.value = null
         _diagnostics.value = _diagnostics.value.copy(
           calendarPermissionGranted = false,
           calendarsFoundCount = 0,
@@ -92,6 +103,7 @@ internal class StandByCalendarCoordinator(
       val calResult = provider.queryCalendarsWithStatus()
       if (calResult.permissionDenied) {
         _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
+        _nextEvent.value = null
         _diagnostics.value = _diagnostics.value.copy(
           calendarPermissionGranted = false,
           calendarsFoundCount = 0,
@@ -125,6 +137,7 @@ internal class StandByCalendarCoordinator(
 
       if (eventsResult?.permissionDenied == true) {
         _snapshot.value = StandByCalendarSnapshot(permissionGranted = false)
+        _nextEvent.value = null
         _diagnostics.value = _diagnostics.value.copy(
           calendarPermissionGranted = false,
           calendarsFoundCount = calendars.size,
@@ -144,6 +157,17 @@ internal class StandByCalendarCoordinator(
         errorMessage = errorMessage,
         isLoading = false,
       )
+      val earliest = events.firstOrNull()
+      _nextEvent.value = if (earliest != null && prefs.standByCalendarEnabled.value) {
+        NextCalendarEvent(
+          title = if (prefs.standByShowEventTitles.value) earliest.title else "Event",
+          startEpochMs = earliest.startEpochMs,
+          endEpochMs = earliest.endEpochMs,
+          isAllDay = earliest.isAllDay,
+        )
+      } else {
+        null
+      }
       _diagnostics.value = _diagnostics.value.copy(
         calendarPermissionGranted = true,
         calendarsFoundCount = calendars.size,

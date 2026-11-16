@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.core.AuraThemeColor
+import com.example.core.FaceRenderMode
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -158,6 +159,7 @@ internal class ImageDialFace(
     accent: AuraThemeColor,
     smoothSeconds: Boolean,
     modifier: Modifier,
+    renderMode: FaceRenderMode,
   ) {
     val context = LocalContext.current
     // Decode only the active dial bitmap and recycle it as soon as the active face changes.

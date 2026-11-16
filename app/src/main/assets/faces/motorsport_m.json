@@ -1,0 +1,79 @@
+{
+  "id": "motorsport_m",
+  "name": "Motorsport M",
+  "canvas": "circle",
+  "layers": [
+    {
+      "id": "dial_image",
+      "type": "image",
+      "drawable": "face_motorsport_m",
+      "mode": "both"
+    },
+    {
+      "id": "hour_hand",
+      "type": "hand",
+      "source": "hour",
+      "length": 0.50,
+      "tailDp": 8,
+      "widthDp": 6.5,
+      "cap": "butt",
+      "bodyColor": "#E2E8F0",
+      "stripeColor": "#FFFFFF",
+      "stripeWidthDp": 2.8,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "both"
+    },
+    {
+      "id": "minute_hand",
+      "type": "hand",
+      "source": "minute",
+      "length": 0.74,
+      "tailDp": 8,
+      "widthDp": 4.8,
+      "cap": "butt",
+      "bodyColor": "#E2E8F0",
+      "stripeColor": "#FFFFFF",
+      "stripeWidthDp": 2.2,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "both"
+    },
+    {
+      "id": "second_hand",
+      "type": "hand",
+      "source": "second",
+      "length": 0.86,
+      "tailDp": 24,
+      "widthDp": 1.8,
+      "cap": "round",
+      "bodyColor": "#E00424",
+      "smooth": true,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "normal",
+      "counterweight": {
+        "radiusDp": 4.5,
+        "ringColor": "#0F172A",
+        "centerColor": "#E00424",
+        "tailOffsetDp": 17
+      }
+    },
+    {
+      "id": "center_cap_outer",
+      "type": "shape",
+      "shape": "circle",
+      "radiusDp": 6.5,
+      "fillColor": "#0F172A",
+      "mode": "both"
+    },
+    {
+      "id": "center_cap_inner",
+      "type": "shape",
+      "shape": "circle",
+      "radiusDp": 3.5,
+      "fillColor": "#E2E8F0",
+      "mode": "both"
+    }
+  ]
+}

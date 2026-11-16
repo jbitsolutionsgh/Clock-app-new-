@@ -1,105 +1,19 @@
 package com.example.faces
 
+import android.content.Context
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import com.example.R
+import com.example.faces.engine.DefinitionFace
+import com.example.faces.engine.FaceAssetRepository
 
 /**
- * Single registry list of all available watch faces.
- * Adding or removing a face requires editing only this list.
+ * Single registry list of all available watch faces, combining data-driven [DefinitionFace]
+ * assets from assets/faces/ alongside the existing [ImageDialFace] collection.
  */
 internal object WatchFaceRegistry {
 
-  private val motorsportSilver = Color(0xFFE2E8F0)
-  private val motorsportRed = Color(0xFFE00424)
-  private val motorsportNavy = Color(0xFF0F172A)
-
-  private val speedmasterGold = Color(0xFFD4AF37)
-  private val speedmasterCream = Color(0xFFFFFBEB)
-
-  val faces: List<WatchFace> = listOf(
-    ImageDialFace(
-      id = "motorsport_m",
-      displayName = "Motorsport M",
-      dialResId = R.drawable.face_motorsport_m,
-      config = DialConfig(
-        hourLengthRatio = 0.50f,
-        hourColor = motorsportSilver,
-        hourWidthDp = 6.5f,
-        hourCap = StrokeCap.Butt,
-        hourStripeColor = Color.White,
-        hourStripeWidthDp = 2.8f,
-        minuteLengthRatio = 0.74f,
-        minuteColor = motorsportSilver,
-        minuteWidthDp = 4.8f,
-        minuteCap = StrokeCap.Butt,
-        minuteStripeColor = Color.White,
-        minuteStripeWidthDp = 2.2f,
-        secondLengthRatio = 0.86f,
-        secondColor = motorsportRed,
-        secondWidthDp = 1.8f,
-        secondTailDp = 24f,
-        counterweight = CounterweightSpec(
-          radiusDp = 4.5f,
-          ringColor = motorsportNavy,
-          centerColor = motorsportRed,
-          tailOffsetDp = 17f,
-        ),
-        centerCapOuterDp = 6.5f,
-        centerCapOuterColor = motorsportNavy,
-        centerCapInnerDp = 3.5f,
-        centerCapInnerColor = motorsportSilver,
-      ),
-    ),
-    ImageDialFace(
-      id = "speedmaster_racing",
-      displayName = "Speedmaster Racing",
-      dialResId = R.drawable.face_speedmaster_racing,
-      config = DialConfig(
-        hourLengthRatio = 0.48f,
-        hourColor = speedmasterGold,
-        hourWidthDp = 4.8f,
-        hourCap = StrokeCap.Round,
-        hourStripeColor = speedmasterCream,
-        hourStripeWidthDp = 2.2f,
-        minuteLengthRatio = 0.72f,
-        minuteColor = speedmasterGold,
-        minuteWidthDp = 3.8f,
-        minuteCap = StrokeCap.Round,
-        minuteStripeColor = speedmasterCream,
-        minuteStripeWidthDp = 1.8f,
-        secondLengthRatio = 0.86f,
-        secondColor = speedmasterGold,
-        secondWidthDp = 1.6f,
-        secondTailDp = 20f,
-        counterweight = CounterweightSpec(
-          radiusDp = 3f,
-          ringColor = speedmasterGold,
-          centerColor = Color.Black,
-          positionAlongPointerRatio = 0.75f,
-        ),
-        centerCapOuterDp = 6f,
-        centerCapOuterColor = speedmasterGold,
-        centerCapInnerDp = 2.5f,
-        centerCapInnerColor = Color.Black,
-        leftSubDial = SubDialSpec(
-          offsetXRatio = -0.38f,
-          lengthRatio = 0.22f * 0.75f,
-          widthDp = 2f,
-          color = speedmasterGold,
-          isSecondsSubDial = true,
-        ),
-        rightSubDial = SubDialSpec(
-          offsetXRatio = 0.38f,
-          lengthRatio = 0.22f * 0.75f,
-          widthDp = 2f,
-          color = speedmasterGold,
-          isSecondsSubDial = false,
-        ),
-        dateOffsetYRatio = 0.52f,
-        dateTextSizeRatio = 0.065f,
-      ),
-    ),
+  private val imageDialFaces: List<WatchFace> = listOf(
     ImageDialFace(
       id = "face_nike_dots",
       displayName = "Volt Sport",
@@ -369,9 +283,63 @@ internal object WatchFaceRegistry {
     MinimalAnalogFace(),
   )
 
+  @Volatile
+  private var cachedFaces: List<WatchFace> = buildFaceList()
+
+  /** Loads JSON definitions from assets/faces/ and refreshes the registered face list. */
+  fun init(context: Context) {
+    FaceAssetRepository.ensureInitialized(context)
+    cachedFaces = buildFaceList()
+  }
+
+  /** Returns all picker watch faces in display order. */
+  val faces: List<WatchFace>
+    get() = cachedFaces
+
   /** Looks up a face by ID across picker faces and Stand By system faces, defaulting to the first registered face. */
   fun findById(id: String?): WatchFace =
     faces.firstOrNull { it.id == id }
       ?: systemFaces.firstOrNull { it.id == id }
       ?: faces.first()
+
+  private fun buildFaceList(): List<WatchFace> {
+    val result = ArrayList<WatchFace>(16)
+    val usedIds = HashSet<String>()
+
+    fun addDefinitionOrFallback(id: String, fallback: (() -> WatchFace)? = null) {
+      val def = FaceAssetRepository.getById(id)
+      if (def != null) {
+        result += DefinitionFace(def)
+        usedIds += def.id
+      } else if (fallback != null) {
+        val fb = fallback()
+        result += fb
+        usedIds += fb.id
+      }
+    }
+
+    // Ported flagship faces first (same IDs as before so user selection persists).
+    addDefinitionOrFallback("motorsport_m") { LegacyDialFaces.motorsportM() }
+    addDefinitionOrFallback("speedmaster_racing") { LegacyDialFaces.speedmasterRacing() }
+
+    // Existing 9 image dial faces untouched.
+    for (dial in imageDialFaces) {
+      if (usedIds.add(dial.id)) {
+        result += dial
+      }
+    }
+
+    // New data-driven faces.
+    addDefinitionOrFallback("big_digital")
+    addDefinitionOrFallback("minimal_plus")
+
+    // Any extra valid JSON face dropped into assets/faces/ is registered automatically.
+    for (def in FaceAssetRepository.allDefinitions()) {
+      if (usedIds.add(def.id)) {
+        result += DefinitionFace(def)
+      }
+    }
+
+    return result
+  }
 }

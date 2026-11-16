@@ -1,0 +1,123 @@
+{
+  "id": "speedmaster_racing",
+  "name": "Speedmaster Racing",
+  "canvas": "circle",
+  "layers": [
+    {
+      "id": "dial_image",
+      "type": "image",
+      "drawable": "face_speedmaster_racing",
+      "mode": "both"
+    },
+    {
+      "id": "date_day",
+      "type": "text",
+      "template": "{day}",
+      "x": 0.0,
+      "y": 0.52,
+      "size": 0.065,
+      "weight": "bold",
+      "align": "center",
+      "color": "#FFFFFF",
+      "font": "default",
+      "mode": "both"
+    },
+    {
+      "id": "subdial_left_seconds",
+      "type": "hand",
+      "source": "second",
+      "pivotX": -0.38,
+      "pivotY": 0.0,
+      "length": 0.165,
+      "widthDp": 2.0,
+      "cap": "round",
+      "bodyColor": "#D4AF37",
+      "smooth": true,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "centerDotRadiusDp": 2.3,
+      "mode": "normal"
+    },
+    {
+      "id": "subdial_right_minutes",
+      "type": "hand",
+      "source": "minuteStep",
+      "pivotX": 0.38,
+      "pivotY": 0.0,
+      "length": 0.165,
+      "widthDp": 2.0,
+      "cap": "round",
+      "bodyColor": "#D4AF37",
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "centerDotRadiusDp": 2.3,
+      "mode": "both"
+    },
+    {
+      "id": "hour_hand",
+      "type": "hand",
+      "source": "hour",
+      "length": 0.48,
+      "tailDp": 8,
+      "widthDp": 4.8,
+      "cap": "round",
+      "bodyColor": "#D4AF37",
+      "stripeColor": "#FFFBEB",
+      "stripeWidthDp": 2.2,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "both"
+    },
+    {
+      "id": "minute_hand",
+      "type": "hand",
+      "source": "minute",
+      "length": 0.72,
+      "tailDp": 8,
+      "widthDp": 3.8,
+      "cap": "round",
+      "bodyColor": "#D4AF37",
+      "stripeColor": "#FFFBEB",
+      "stripeWidthDp": 1.8,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "both"
+    },
+    {
+      "id": "second_hand",
+      "type": "hand",
+      "source": "second",
+      "length": 0.86,
+      "tailDp": 20,
+      "widthDp": 1.6,
+      "cap": "round",
+      "bodyColor": "#D4AF37",
+      "smooth": true,
+      "shadow": true,
+      "shadowAlpha": 0.45,
+      "mode": "normal",
+      "counterweight": {
+        "radiusDp": 3.0,
+        "ringColor": "#D4AF37",
+        "centerColor": "#000000",
+        "positionRatio": 0.75
+      }
+    },
+    {
+      "id": "center_cap_outer",
+      "type": "shape",
+      "shape": "circle",
+      "radiusDp": 6.0,
+      "fillColor": "#D4AF37",
+      "mode": "both"
+    },
+    {
+      "id": "center_cap_inner",
+      "type": "shape",
+      "shape": "circle",
+      "radiusDp": 2.5,
+      "fillColor": "#000000",
+      "mode": "both"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ package com.example.faces
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.example.core.AuraThemeColor
+import com.example.core.FaceRenderMode
 import java.util.Calendar
 
 /**
@@ -74,12 +75,17 @@ internal interface WatchFace {
   val id: String
   val displayName: String
 
+  /** True when the face manages its own policy-driven FaceDataSource ticker (e.g. DefinitionFace). */
+  val usesOwnDataLoop: Boolean
+    get() = false
+
   @Composable
   fun Render(
     timeProvider: () -> ClockTimeSnapshot,
     accent: AuraThemeColor,
     smoothSeconds: Boolean,
     modifier: Modifier,
+    renderMode: FaceRenderMode = FaceRenderMode.NORMAL,
   )
 
   /** Lightweight thumbnail preview used by the face picker; defaults to a minimal placeholder. */

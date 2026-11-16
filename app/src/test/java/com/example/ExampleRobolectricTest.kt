@@ -7,17 +7,36 @@ import com.example.core.AuraPrefs
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
 import com.example.core.CrashCatcher
+import com.example.core.FaceBatteryData
+import com.example.core.FaceData
+import com.example.core.FaceDataNeed
+import com.example.core.FaceRenderMode
+import com.example.core.FaceTimeData
+import com.example.core.FaceTimerData
+import com.example.core.FaceUpdatePolicy
+import com.example.core.NextCalendarEvent
 import com.example.core.StandByCalendarWindow
+import com.example.core.TimerPhase
 import com.example.earbud.MediaKeyRouter
 import com.example.faces.DialThumbnailCache
 import com.example.faces.FacesChiplet
 import com.example.faces.WatchFaceRegistry
+import com.example.faces.engine.ColorSpec
+import com.example.faces.engine.DefinitionFace
+import com.example.faces.engine.FaceAssetRepository
+import com.example.faces.engine.FaceDefinitionParser
+import com.example.faces.engine.FaceMath
+import com.example.faces.engine.GaugeSource
+import com.example.faces.engine.HandLayer
+import com.example.faces.engine.HandSource
+import com.example.faces.engine.ShowCondition
 import com.example.standby.DeviceCalendarInfo
 import com.example.standby.DeviceCalendarProvider
 import com.example.standby.StandByCalendarCoordinator
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -95,24 +114,154 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `face navigator cycles through all eleven registered faces in exact order`() {
+  fun `face navigator cycles through all thirteen registered faces including ported and new definitions`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val prefs = CoreSingletons.prefs(context)
     val nav = FacesChiplet.ensureInitialized(context)
     val options = nav.getFaceOptions()
-    assertEquals(11, options.size)
+    assertEquals(13, options.size)
     assertEquals("motorsport_m", options.first().first)
     assertEquals("speedmaster_racing", options[1].first)
     assertEquals("face_nike_dots", options[2].first)
-    assertEquals("face_wood_art", options.last().first)
-    assertEquals("Workshop Wood", options.last().second)
+    assertEquals("face_wood_art", options[10].first)
+    assertEquals("big_digital", options[11].first)
+    assertEquals("minimal_plus", options[12].first)
 
-    // StandBy digital face remains resolvable even though it is not in the 11-face picker list.
+    // Flagship ported faces must be DefinitionFace instances driven by assets/faces/*.json.
+    assertTrue(WatchFaceRegistry.findById("motorsport_m") is DefinitionFace)
+    assertTrue(WatchFaceRegistry.findById("speedmaster_racing") is DefinitionFace)
+    assertTrue(WatchFaceRegistry.findById("big_digital") is DefinitionFace)
+    assertTrue(WatchFaceRegistry.findById("minimal_plus") is DefinitionFace)
+
+    // StandBy digital face remains resolvable even though it is not in the picker list.
     assertEquals("standby_digital", WatchFaceRegistry.findById("standby_digital").id)
 
     prefs.setSelectedFaceId(options.first().first)
     nav.nextFace()
     assertEquals(options[1].first, prefs.selectedFaceId.value)
+  }
+
+  @Test
+  fun `all bundled json watch face definitions load without errors`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    FaceAssetRepository.ensureInitialized(context)
+    val diag = FaceAssetRepository.diagnostics.value
+    assertTrue("Expected zero definition errors, got: ${diag.errors}", diag.errors.isEmpty())
+    val loadedIds = diag.loadedDefinitions.map { it.first }.toSet()
+    assertTrue(loadedIds.containsAll(listOf("motorsport_m", "speedmaster_racing", "big_digital", "minimal_plus")))
+  }
+
+  @Test
+  fun `face definition parser handles valid and invalid json safely without throwing`() {
+    val validJson = """
+      {
+        "id": "custom_clean",
+        "name": "Custom Clean",
+        "canvas": "circle",
+        "layers": [
+          { "id": "bg", "type": "shape", "shape": "ring", "radius": 0.9, "strokeColor": "@primary" },
+          { "id": "hr", "type": "hand", "source": "hour", "length": 0.5, "widthDp": 5, "bodyColor": "#FFFFFF" },
+          { "id": "min", "type": "hand", "source": "minute", "length": 0.75, "widthDp": 4, "bodyColor": "@onSurface" }
+        ]
+      }
+    """.trimIndent()
+    val validResult = FaceDefinitionParser.parse(validJson)
+    assertTrue(validResult is FaceDefinitionParser.ParseResult.Success)
+    val def = (validResult as FaceDefinitionParser.ParseResult.Success).definition
+    assertEquals("custom_clean", def.id)
+    assertEquals(3, def.layers.size)
+    // No seconds layer -> updatePolicy drops to EVERY_MINUTE!
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, def.updatePolicy(FaceRenderMode.NORMAL))
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, def.updatePolicy(FaceRenderMode.AMBIENT))
+    assertEquals(setOf(FaceDataNeed.TIME), def.dataNeeds)
+
+    val malformed = FaceDefinitionParser.parse("{ not valid json")
+    assertTrue(malformed is FaceDefinitionParser.ParseResult.Error)
+
+    val missingLayers = FaceDefinitionParser.parse("""{ "id": "x", "name": "X" }""")
+    assertTrue(missingLayers is FaceDefinitionParser.ParseResult.Error)
+
+    val badLayerType = FaceDefinitionParser.parse(
+      """{ "id": "x", "name": "X", "layers": [ { "type": "unknown" } ] }""",
+    )
+    assertTrue(badLayerType is FaceDefinitionParser.ParseResult.Error)
+
+    val badColor = FaceDefinitionParser.parse(
+      """{ "id": "x", "name": "X", "layers": [ { "type": "hand", "source": "hour", "length": 0.5, "bodyColor": "@nope" } ] }""",
+    )
+    assertTrue(badColor is FaceDefinitionParser.ParseResult.Error)
+  }
+
+  @Test
+  fun `big digital and minimal plus downgrade update frequency cleanly in ambient mode`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    FaceAssetRepository.ensureInitialized(context)
+
+    val bigDigital = FaceAssetRepository.getById("big_digital")
+    assertNotNull(bigDigital)
+    assertEquals(FaceUpdatePolicy.EVERY_SECOND, bigDigital!!.updatePolicy(FaceRenderMode.NORMAL))
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, bigDigital.updatePolicy(FaceRenderMode.AMBIENT))
+    assertTrue(bigDigital.dataNeeds.containsAll(setOf(FaceDataNeed.TIME, FaceDataNeed.BATTERY, FaceDataNeed.NEXT_EVENT)))
+
+    val minimalPlus = FaceAssetRepository.getById("minimal_plus")
+    assertNotNull(minimalPlus)
+    assertEquals(FaceUpdatePolicy.SMOOTH_FRAME, minimalPlus!!.updatePolicy(FaceRenderMode.NORMAL))
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, minimalPlus.updatePolicy(FaceRenderMode.AMBIENT))
+  }
+
+  @Test
+  fun `face math computes exact hand angles gauges conditions and templates`() {
+    val time = FaceTimeData(
+      hour12 = 3,
+      hour24 = 15,
+      minute = 30,
+      second = 15,
+      millis = 500,
+      is24Hour = false,
+      amPm = "PM",
+      dayOfMonth = 5,
+      dayNameShort = "THU",
+      monthNameShort = "MAR",
+    )
+    // 3:30:15 -> hour = (3 + 30.25/60) * 30 = 105.125 deg, minute = 30.25 * 6 = 181.5 deg, second = 15 * 6 = 90 deg
+    val (hDiscrete, mDiscrete, sDiscrete) = FaceMath.timeHandAngles(time, smoothSeconds = false)
+    assertEquals(105.125f, hDiscrete, 0.01f)
+    assertEquals(181.5f, mDiscrete, 0.01f)
+    assertEquals(90f, sDiscrete, 0.01f)
+
+    // Smooth seconds adds 0.5s -> 93 deg
+    val (_, _, sSmooth) = FaceMath.timeHandAngles(time, smoothSeconds = true)
+    assertEquals(93f, sSmooth, 0.01f)
+
+    val data = FaceData(
+      time = time,
+      battery = FaceBatteryData(levelPercent = 50, isCharging = true),
+      nextEvent = NextCalendarEvent("Staff Sync", 0L, 0L, isAllDay = true),
+      timer = FaceTimerData(phase = TimerPhase.RUNNING, remainingMs = 65_000L, totalDurationMs = 120_000L, progress = 0.5f, roundNumber = 2),
+    )
+
+    val batteryHand = HandLayer(
+      id = "bat",
+      source = HandSource.BATTERY,
+      length = 0.2f,
+      widthDp = 2f,
+      bodyColor = ColorSpec.Token("primary"),
+      minValue = 0f,
+      maxValue = 100f,
+      startAngle = -120f,
+      endAngle = 120f,
+    )
+    assertEquals(0f, FaceMath.handAngleDegrees(batteryHand, data, FaceRenderMode.NORMAL), 0.01f)
+    assertEquals(0.5f, FaceMath.gaugeFraction(GaugeSource.BATTERY, data), 0.001f)
+
+    assertTrue(FaceMath.isConditionMet(ShowCondition.TimerRunning, data, FaceRenderMode.NORMAL))
+    assertTrue(FaceMath.isConditionMet(ShowCondition.HasNextEvent, data, FaceRenderMode.NORMAL))
+    assertTrue(FaceMath.isConditionMet(ShowCondition.Charging, data, FaceRenderMode.NORMAL))
+    assertFalse(FaceMath.isConditionMet(ShowCondition.BatteryBelow(20), data, FaceRenderMode.NORMAL))
+    assertTrue(FaceMath.isConditionMet(ShowCondition.IsAmbient, data, FaceRenderMode.AMBIENT))
+
+    val formatted = FaceMath.formatTemplate("{hour}:{minute} {ampm} | {nextEventTime} {nextEventTitle} | {timerRemaining} {timerRound}", data)
+    assertEquals("3:30 PM | All day Staff Sync | 01:05 R2", formatted)
   }
 
   @Test

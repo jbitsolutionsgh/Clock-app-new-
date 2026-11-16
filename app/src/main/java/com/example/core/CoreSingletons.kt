@@ -15,6 +15,9 @@ object CoreSingletons {
   private var speakerInstance: TimeSpeaker? = null
 
   @Volatile
+  private var faceDataSourceInstance: FaceDataSource? = null
+
+  @Volatile
   var timerController: TimerController? = null
 
   @Volatile
@@ -32,6 +35,12 @@ object CoreSingletons {
   @Volatile
   var standByDiagnosticsProvider: StandByDiagnosticsProvider? = null
 
+  @Volatile
+  var nextEventSource: NextEventSource? = null
+
+  @Volatile
+  var faceDiagnosticsProvider: FaceDiagnosticsProvider? = null
+
   /** Returns the single shared AuraPrefs instance. */
   fun prefs(context: Context): AuraPrefs =
     prefsInstance ?: synchronized(this) {
@@ -42,5 +51,13 @@ object CoreSingletons {
   fun speaker(context: Context): TimeSpeaker =
     speakerInstance ?: synchronized(this) {
       speakerInstance ?: TimeSpeaker(context.applicationContext).also { speakerInstance = it }
+    }
+
+  /** Returns the single shared FaceDataSource instance. */
+  fun faceDataSource(context: Context): FaceDataSource =
+    faceDataSourceInstance ?: synchronized(this) {
+      faceDataSourceInstance ?: CoreFaceDataSource(context.applicationContext).also {
+        faceDataSourceInstance = it
+      }
     }
 }

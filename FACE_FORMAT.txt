@@ -1,0 +1,280 @@
+AURACLOCK WATCH FACE DEFINITION FORMAT (v1)
+=========================================
+
+Location & Naming
+-----------------
+Put one JSON file per watch face inside:
+  app/src/main/assets/faces/<id>.json
+
+The engine loads all valid .json files from assets/faces/ on startup.
+Any invalid file is skipped safely without crashing and listed in the
+in-app Diagnostics screen under "Watch Face Definitions".
+
+Coordinate System & Units
+-------------------------
+- The dial stage is a centered square sized to 94% of the screen's shorter side.
+- Origin (0, 0) is the exact center of the dial.
+- All positions (x, y, pivotX, pivotY) and ratio sizes (radius, innerRadius,
+  outerRadius, length, tail, width, height, cornerRadius, size, textSize) are
+  multiples of R, where R = half of the dial side.
+  - Positive x points right (-1.0 .. +1.0 inside dial circle).
+  - Positive y points down (-1.0 .. +1.0 inside dial circle).
+- Stroke widths, counterweight radii, center dot radii, and tailDp values ending
+  in "Dp" are specified in density-independent pixels (dp) for crisp lines.
+- Clock angles are in degrees clockwise where 0 deg is 12 o'clock (90 = 3,
+  180 = 6, 270 = 9). Arc gauge angles follow standard Canvas degrees where
+  -90 deg is 12 o'clock and 0 deg is 3 o'clock.
+
+Top-Level JSON Fields
+---------------------
+{
+  "id": "my_face",            // Required, unique string ID
+  "name": "My Face",          // Required, display name shown in picker
+  "canvas": "circle",         // "circle" or "roundedRect" (default: "circle")
+  "layers": [ ... ]           // Required non-empty array drawn bottom to top
+}
+
+Common Layer Fields
+-------------------
+Every object inside "layers" accepts:
+- "id": string              Optional layer identifier (default: "layer_<index>")
+- "type": string            Required: image | shape | ticks | hand | text | gauge | slot
+- "alpha": number           Optional opacity 0.0 .. 1.0 (default: 1.0)
+- "mode": string            Optional: "normal" | "ambient" | "both" (default: "both")
+                            Stand By runs in "ambient" mode; normal-only layers and
+                            all seconds hands are hidden in ambient mode.
+- "showWhen": string        Optional runtime visibility condition:
+                              "timerRunning"
+                              "hasNextEvent"
+                              "charging"
+                              "batteryBelow:<N>"   (N = 1..100, e.g. "batteryBelow:20")
+                              "isAmbient"
+
+Colour Tokens & Literals
+------------------------
+Any colour field accepts either:
+- Hex ARGB/RGB literal: "#RRGGBB" or "#AARRGGBB" (e.g. "#E00424", "#80FFFFFF")
+- Material 3 theme token (tracks user's accent theme automatically):
+  "@primary", "@secondary", "@onSurface", "@surface", "@error"
+
+Layer Types & Properties
+------------------------
+
+1) type: "image"
+   Draws a dial picture from res/drawable-nodpi unclipped (only the active
+   face's bitmap is kept in memory and recycled on switch).
+   - "drawable": string     Required resource name without extension
+                            (e.g. "face_motorsport_m")
+
+2) type: "shape"
+   Draws a circle, ring, rect, or roundedRect.
+   - "shape": string        Required: "circle" | "ring" | "rect" | "roundedRect"
+   - "x", "y": number       Center offset in R (default: 0.0)
+   - "radius": number       Radius in R (circle/ring)
+   - "radiusDp": number     Fixed radius in dp (useful for crisp center caps)
+   - "width", "height": num Width and height in R (rect/roundedRect)
+   - "cornerRadius": num    Corner radius in R (roundedRect, default: 0.08)
+   - "fillColor": color     Optional fill colour
+   - "strokeColor": color   Optional stroke colour
+   - "strokeWidthDp": num   Stroke width in dp (default: 2.0 for ring, 0 for others)
+   (At least one of fillColor or strokeColor must be set.)
+
+3) type: "ticks"
+   Draws radial tick marks around the dial center.
+   - "count": int           Required total ticks (1..360, e.g. 60)
+   - "innerRadius": number  Start radius in R (default: 0.85)
+   - "outerRadius": number  End radius in R (default: 0.94)
+   - "widthDp": number      Line width in dp (default: 1.5)
+   - "color": color         Required tick colour
+   - "cap": string          "round" | "square" | "butt" (default: "round")
+   - "majorEvery": int      Emphasize every Nth tick (e.g. 5 for 60 ticks; 0 = off)
+   - "majorInnerRadius": num Optional major inner radius in R
+   - "majorOuterRadius": num Optional major outer radius in R
+   - "majorWidthDp": num    Optional major width in dp
+   - "majorColor": color    Optional major tick colour
+
+4) type: "hand"
+   Draws a rotating hand or sub-dial needle around (pivotX, pivotY).
+   - "source": string       Required:
+                            "hour" | "minute" | "minuteStep" | "second" |
+                            "battery" | "timerProgress" |
+                            "stopwatchSeconds" | "stopwatchMinutes"
+   - "pivotX", "pivotY": num Pivot offset in R (default: 0.0)
+   - "length": number       Required tip length in R (> 0)
+   - "tail": number         Optional tail length in R
+   - "tailDp": number       Optional tail length in dp (used if tail omitted)
+   - "widthDp": number      Hand width in dp (default: 3.0)
+   - "cap": string          "round" | "square" | "butt" (default: "round")
+   - "bodyColor": color     Required hand body colour
+   - "stripeColor": color   Optional inner lume stripe colour
+   - "stripeWidthDp": num   Stripe width in dp (default: 0)
+   - "stripeTipOnly": bool  Draw stripe on outer 38% tip only (default: false)
+   - "shadow": bool         Draw 2dp drop shadow (default: true)
+   - "shadowAlpha": number  Shadow opacity 0..1 (default: 0.45)
+   - "smooth": bool         Sub-second frame sweep when in normal mode (default: false)
+   - "centerDotRadiusDp": num Optional needle hub dot radius in dp
+   - "minValue", "maxValue": num Input range for numeric sources (default: 0..100)
+   - "startAngle", "endAngle": num Output angle range for numeric sources (default: 0..360)
+   - "counterweight": object Optional circular counterweight along pointer/tail:
+       { "radiusDp": 4.5, "ringColor": "#0F172A", "centerColor": "#E00424",
+         "positionRatio": 0.75, "tailOffsetDp": 17 }
+
+5) type: "text"
+   Draws formatted live data text.
+   - "template": string     Required text containing any placeholders below
+   - "x", "y": number       Anchor offset in R (default: 0.0)
+   - "size": number         Required font height in R (> 0)
+   - "weight": string       "normal" | "medium" | "bold" (default: "normal")
+   - "align": string        "left" | "center" | "right" (default: "center")
+   - "color": color         Required text colour
+   - "letterSpacing": num   Extra tracking in ems (default: 0.0)
+   - "font": string         "default" | "sans" | "mono" (default: "default")
+
+6) type: "gauge"
+   Draws an arc progress gauge.
+   - "source": string       Required: "battery" | "timerProgress" |
+                                      "secondsProgress" | "minutesProgress"
+   - "x", "y": number       Center offset in R (default: 0.0)
+   - "radius": number       Required arc radius in R (> 0)
+   - "startAngle": number   Arc start angle in degrees, -90 = top (default: -90)
+   - "sweepAngle": number   Total arc sweep in degrees (default: 360)
+   - "thicknessDp": number  Stroke thickness in dp (default: 6.0)
+   - "cap": string          "round" | "square" | "butt" (default: "round")
+   - "trackColor": color    Optional background track arc colour
+   - "fillColor": color     Required active progress colour
+
+7) type: "slot"
+   Draws a complication/date rounded pill or box with formatted text centered inside.
+   - "template": string     Required text template
+   - "x", "y": number       Center offset in R (default: 0.0)
+   - "width", "height": num Required box dimensions in R (> 0)
+   - "cornerRadius": num    Corner radius in R (default: 0.04)
+   - "fillColor": color     Optional background fill colour
+   - "strokeColor": color   Optional border colour
+   - "strokeWidthDp": num   Border width in dp (default: 1.0)
+   - "textSize": number     Font height in R (default: 0.65 * height)
+   - "textColor": color     Text colour (default: "@onSurface")
+   - "weight": string       "normal" | "medium" | "bold" (default: "bold")
+   - "align": string        "left" | "center" | "right" (default: "center")
+   - "font": string         "default" | "sans" | "mono" (default: "mono")
+   - "letterSpacing": num   Extra tracking in ems (default: 0.0)
+
+Text Placeholders
+-----------------
+  {hour}            12h or 24h hour respecting device setting
+  {hour12}          1..12
+  {hour24}          00..23
+  {minute}          00..59
+  {second}          00..59 (causes second-level updates when active)
+  {ampm}            AM / PM
+  {day}             01..31
+  {dayName}         MON / TUE / ...
+  {monthName}       JAN / FEB / ...
+  {battery}         e.g. 84%
+  {nextEventTime}   Next calendar event start time (or "All day")
+  {nextEventTitle}  Next calendar event title (empty when none)
+  {timerRemaining}  Active timer countdown mm:ss
+  {timerRound}      Round label e.g. R1
+
+Update Policy (Battery Saver)
+-----------------------------
+The engine inspects only the active layers for the current mode:
+- Smooth second/stopwatch hand active in normal mode  -> frame-by-frame sweep
+- Any seconds hand, {second}, {timerRemaining}, or secondsProgress active
+                                                     -> once per real second
+- No active seconds elements (or ambient mode without seconds text/gauges)
+                                                     -> once per real minute
+- Screen hidden / not RESUMED                        -> all updates stopped
+
+Complete Example (minimal_plus.json)
+------------------------------------
+{
+  "id": "minimal_plus",
+  "name": "Minimal Plus",
+  "canvas": "circle",
+  "layers": [
+    {
+      "id": "outer_ring",
+      "type": "shape",
+      "shape": "ring",
+      "radius": 0.96,
+      "strokeColor": "#1E293B",
+      "strokeWidthDp": 2.0
+    },
+    {
+      "id": "dial_ticks",
+      "type": "ticks",
+      "count": 60,
+      "innerRadius": 0.88,
+      "outerRadius": 0.94,
+      "widthDp": 1.4,
+      "color": "#475569",
+      "majorEvery": 5,
+      "majorInnerRadius": 0.79,
+      "majorWidthDp": 3.0,
+      "majorColor": "@primary"
+    },
+    {
+      "id": "battery_gauge",
+      "type": "gauge",
+      "source": "battery",
+      "x": 0.0,
+      "y": -0.34,
+      "radius": 0.17,
+      "startAngle": -220,
+      "sweepAngle": 260,
+      "thicknessDp": 4.0,
+      "trackColor": "#1E293B",
+      "fillColor": "@primary"
+    },
+    {
+      "id": "date_slot",
+      "type": "slot",
+      "template": "{dayName} {day}",
+      "x": 0.0,
+      "y": 0.44,
+      "width": 0.44,
+      "height": 0.16,
+      "fillColor": "#111827",
+      "strokeColor": "@primary",
+      "textSize": 0.085,
+      "textColor": "@onSurface",
+      "font": "mono"
+    },
+    {
+      "id": "hour_hand",
+      "type": "hand",
+      "source": "hour",
+      "length": 0.48,
+      "tailDp": 10,
+      "widthDp": 6.5,
+      "bodyColor": "@onSurface",
+      "stripeColor": "@primary",
+      "stripeWidthDp": 2.4,
+      "stripeTipOnly": true
+    },
+    {
+      "id": "minute_hand",
+      "type": "hand",
+      "source": "minute",
+      "length": 0.74,
+      "tailDp": 12,
+      "widthDp": 4.5,
+      "bodyColor": "@onSurface",
+      "stripeColor": "@primary",
+      "stripeWidthDp": 1.8,
+      "stripeTipOnly": true
+    },
+    {
+      "id": "second_hand",
+      "type": "hand",
+      "source": "second",
+      "length": 0.86,
+      "tailDp": 20,
+      "widthDp": 1.8,
+      "bodyColor": "@primary",
+      "smooth": true,
+      "mode": "normal"
+    }
+  ]
+}
