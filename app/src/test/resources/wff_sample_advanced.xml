@@ -1,0 +1,69 @@
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Advanced Spec WFF" />
+
+  <UserConfigurations>
+    <ColorConfiguration id="theme_accent" displayName="Accent Color" defaultValue="gold">
+      <ColorOption id="gold" displayName="Gold" colors="#FFFFC107 #FFFF9800" />
+      <ColorOption id="cyan" displayName="Cyan" colors="#FF00E5FF #FF00B8D4" />
+    </ColorConfiguration>
+    <ListConfiguration id="style_mode" displayName="Dial Style" defaultValue="minimal">
+      <ListOption id="minimal" displayName="Minimal" />
+      <ListOption id="sport" displayName="Sport" />
+    </ListConfiguration>
+    <BooleanConfiguration id="show_seconds_ring" displayName="Show Seconds Ring" defaultValue="TRUE" />
+  </UserConfigurations>
+
+  <BitmapFonts>
+    <BitmapFont name="lcd_digits">
+      <Character name="0" resource="digit_0" width="24" height="36" />
+      <Character name="1" resource="digit_1" width="24" height="36" />
+      <Word name="AM" resource="word_am" width="32" height="20" />
+    </BitmapFont>
+  </BitmapFonts>
+
+  <Scene backgroundColor="#FF000000">
+    <Variant mode="AMBIENT" target="backgroundColor" value="#FF050505" />
+
+    <PartImage x="0" y="0" width="450" height="450" blendMode="MULTIPLY" tintColor="[CONFIGURATION.theme_accent.0]" resource="dial_overlay" />
+
+    <Condition>
+      <Expressions>
+        <Expression name="showRing">[CONFIGURATION.show_seconds_ring] == TRUE</Expression>
+      </Expressions>
+      <Compare expression="showRing">
+        <PartDraw x="0" y="0" width="450" height="450">
+          <Arc centerX="225" centerY="225" width="400" height="400" startAngle="0" sweepAngle="180">
+            <Stroke color="[CONFIGURATION.theme_accent]" thickness="6" cap="ROUND" />
+            <Transform target="sweepAngle" value="[SECOND] * 6">
+              <Animation duration="0.4" interpolation="EASE_OUT" repeat="0" fps="20" />
+            </Transform>
+          </Arc>
+        </PartDraw>
+      </Compare>
+      <Default>
+        <PartText x="50" y="340" width="350" height="40">
+          <Text align="CENTER">
+            <Font family="custom_sans" size="22" color="#FFFFFFFF">
+              <Shadow color="#88000000" offsetX="2" offsetY="2" radius="4" />
+              <Outline color="#FF000000" width="1.5" />
+              <Template>Style: %s</Template>
+              <Parameter expression="[CONFIGURATION.style_mode]" />
+            </Font>
+          </Text>
+        </PartText>
+      </Default>
+    </Condition>
+
+    <Group x="0" y="0" width="450" height="450" alpha="255">
+      <Variant mode="AMBIENT" target="alpha" value="120" />
+      <PartText x="100" y="180" width="250" height="60">
+        <Text align="CENTER">
+          <BitmapFont family="lcd_digits" size="36">
+            <Template>%02d</Template>
+            <Parameter expression="[HOUR_0_23]" />
+          </BitmapFont>
+        </Text>
+      </PartText>
+    </Group>
+  </Scene>
+</WatchFace>

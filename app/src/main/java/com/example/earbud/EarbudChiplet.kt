@@ -341,6 +341,53 @@ object EarbudChiplet {
               )
             }
           }
+          Spacer(modifier = Modifier.height(6.dp))
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("diag_wff_compatibility_row"),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "Compatibility",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val avgScore = if (faceDiag.wffFaces.isEmpty()) {
+              "No imported faces"
+            } else {
+              "${faceDiag.wffFaces.sumOf { it.scorePercent } / faceDiag.wffFaces.size}% avg (${faceDiag.wffFaces.size})"
+            }
+            Text(
+              text = avgScore,
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.testTag("diag_wff_faces_count"),
+            )
+          }
+          faceDiag.wffFaces.forEach { wff ->
+            Text(
+              text = "• ${wff.name}: ${wff.scorePercent}% (${wff.drawnCount} drawn, ${wff.partlyDrawnCount} partly drawn, ${wff.skippedCount} skipped)",
+              style = MaterialTheme.typography.bodyMedium,
+              color = if (wff.skippedCount == 0 && wff.partlyDrawnCount == 0) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+              modifier = Modifier.testTag("diag_wff_compatibility_${wff.id}"),
+            )
+            wff.partlyDrawnItems.forEach { partly ->
+              Text(
+                text = "   ~ ${partly.element}: ${partly.reason}",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFF59E0B),
+              )
+            }
+            wff.skippedItems.forEach { skipped ->
+              Text(
+                text = "   - ${skipped.element}: ${skipped.reason}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
         }
       }
 

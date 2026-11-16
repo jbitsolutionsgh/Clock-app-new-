@@ -465,4 +465,407 @@ class ExampleRobolectricTest {
     assertTrue(reloaded.timerFullScreenByDefault.value)
     assertTrue(reloaded.timerGoFullScreenOnStart.value)
   }
+
+  @Test
+  fun `wff xml parser loads sample face records skipped elements and rejects binary xml`() {
+    val xmlStream = javaClass.classLoader!!.getResourceAsStream("wff_sample_analog_digital.xml")
+    assertNotNull("Expected test resource wff_sample_analog_digital.xml", xmlStream)
+    val xmlText = xmlStream!!.bufferedReader().use { it.readText() }
+
+    val result = com.example.faces.wff.WffXmlParser.parse(xmlText, "wff_test", "Fallback")
+    assertTrue(result is com.example.faces.wff.WffParseResult.Success)
+    val face = (result as com.example.faces.wff.WffParseResult.Success).face
+
+    assertEquals("Classroom Hybrid WFF", face.name)
+    assertEquals(450f, face.width, 0.01f)
+    assertEquals(450f, face.height, 0.01f)
+    assertEquals(com.example.faces.wff.WffClipShape.CIRCLE, face.clipShape)
+    assertTrue(face.report.drawnElements.containsAll(listOf("WatchFace", "Scene", "AnalogClock", "HourHand", "SecondHand", "DigitalClock", "PartDraw", "PartText", "PartImage")))
+    assertEquals(1, face.report.skippedItems.size)
+    assertEquals("ComplicationSlot", face.report.skippedItems.first().element)
+
+    assertTrue(com.example.faces.wff.WffXmlParser.isBinaryXml(byteArrayOf(0x03, 0x00, 0x08, 0x00)))
+    assertFalse(com.example.faces.wff.WffXmlParser.isBinaryXml(xmlText.toByteArray()))
+    assertTrue(com.example.faces.wff.WffXmlParser.parse("<OtherRoot />", "x", "x") is com.example.faces.wff.WffParseResult.Error)
+  }
+
+  @Test
+  fun `wff expression evaluator handles time battery templates formatting and ambient cadence`() {
+    val time = FaceTimeData(
+      hour12 = 3,
+      hour24 = 15,
+      minute = 30,
+      second = 45,
+      millis = 500,
+      is24Hour = true,
+      amPm = "PM",
+      dayOfMonth = 9,
+      dayNameShort = "MON",
+      monthNameShort = "NOV",
+      year = 2026,
+      monthNumber = 11,
+      dayOfWeek = Calendar.MONDAY,
+    )
+    val data = FaceData(
+      time = time,
+      battery = FaceBatteryData(levelPercent = 65, isCharging = true),
+    )
+
+    val angleExpr = com.example.faces.wff.WffExpression.compile("([HOUR_0_11] * 30) + ([MINUTE] * 0.5)")
+    assertEquals(105f, com.example.faces.wff.WffExpression.evaluateFloat(angleExpr, data), 0.01f)
+
+    val cmpExpr = com.example.faces.wff.WffExpression.compile("[IS_BATTERY_CHARGING] == 1 && [BATTERY_PERCENT] > 50")
+    assertEquals(1f, com.example.faces.wff.WffExpression.evaluateFloat(cmpExpr, data), 0.01f)
+
+    val evalCtx = com.example.faces.wff.WffEvalContext(data = data)
+    val sb = StringBuilder()
+    com.example.faces.wff.WffExpression.formatTemplate(
+      template = "%s %02d - %d%%",
+      parameters = listOf(
+        com.example.faces.wff.WffExpression.compile("[DAY_OF_WEEK_S]"),
+        com.example.faces.wff.WffExpression.compile("[DAY]"),
+        com.example.faces.wff.WffExpression.compile("[BATTERY_PERCENT]"),
+      ),
+      ctx = evalCtx,
+      out = sb,
+    )
+    assertEquals("Mon 09 - 65%", sb.toString())
+
+    com.example.faces.wff.WffExpression.formatTimeText("HH:mm:ss", "24", data, isAmbient = false, out = sb)
+    assertEquals("15:30:45", sb.toString())
+    com.example.faces.wff.WffExpression.formatTimeText("HH:mm:ss", "24", data, isAmbient = true, out = sb)
+    assertEquals("15:30", sb.toString())
+
+    val xmlText = javaClass.classLoader!!.getResourceAsStream("wff_sample_analog_digital.xml")!!.bufferedReader().use { it.readText() }
+    val face = (com.example.faces.wff.WffXmlParser.parse(xmlText, "wff_cadence", "WFF") as com.example.faces.wff.WffParseResult.Success).face
+    assertEquals(FaceUpdatePolicy.SMOOTH_FRAME, com.example.faces.wff.WffExpression.updatePolicy(face, FaceRenderMode.NORMAL))
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, com.example.faces.wff.WffExpression.updatePolicy(face, FaceRenderMode.AMBIENT))
+  }
+
+  @Test
+  fun `arsc reader resolves resource names to archive paths`() {
+    val arscBytes = buildMinimalTestArsc(
+      globalStrings = listOf("res/ab.webp", "res/cd.png"),
+      typeName = "drawable",
+      entries = listOf("sample_dial_bg" to 0, "sample_second_hand" to 1),
+    )
+    val resolved = com.example.faces.wff.ArscResourceTableReader.readDrawableResourcePaths(arscBytes)
+    assertEquals("res/ab.webp", resolved["sample_dial_bg"])
+    assertEquals("res/cd.png", resolved["sample_second_hand"])
+  }
+
+  @Test
+  fun `wff storage imports archive with arsc fallback registers face and deletes cleanly`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = CoreSingletons.prefs(context)
+    val xmlText = javaClass.classLoader!!.getResourceAsStream("wff_sample_analog_digital.xml")!!.bufferedReader().use { it.readText() }
+
+    val bmp = android.graphics.Bitmap.createBitmap(4, 4, android.graphics.Bitmap.Config.ARGB_8888)
+    val pngOut = java.io.ByteArrayOutputStream()
+    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, pngOut)
+    val pngBytes = pngOut.toByteArray()
+    bmp.recycle()
+
+    val arscBytes = buildMinimalTestArsc(
+      globalStrings = listOf("res/zz.png"),
+      typeName = "drawable",
+      entries = listOf("sample_dial_bg" to 0),
+    )
+
+    val zipOut = java.io.ByteArrayOutputStream()
+    java.util.zip.ZipOutputStream(zipOut).use { zos ->
+      zos.putNextEntry(java.util.zip.ZipEntry("res/raw/watchface.xml"))
+      zos.write(xmlText.toByteArray(Charsets.UTF_8))
+      zos.closeEntry()
+
+      // Named entry under res/drawable/
+      zos.putNextEntry(java.util.zip.ZipEntry("res/drawable/sample_hour_hand.png"))
+      zos.write(pngBytes)
+      zos.closeEntry()
+
+      // Renamed entry resolved only via resources.arsc fallback
+      zos.putNextEntry(java.util.zip.ZipEntry("res/zz.png"))
+      zos.write(pngBytes)
+      zos.closeEntry()
+
+      zos.putNextEntry(java.util.zip.ZipEntry("resources.arsc"))
+      zos.write(arscBytes)
+      zos.closeEntry()
+    }
+
+    val importResult = com.example.faces.wff.WffStorageManager.importFromStream(
+      context = context,
+      sourceFileName = "hybrid_sample.apk",
+      inputStream = java.io.ByteArrayInputStream(zipOut.toByteArray()),
+    )
+    assertTrue(importResult is com.example.faces.wff.WffImportResult.Success)
+    val stored = (importResult as com.example.faces.wff.WffImportResult.Success).entry
+
+    // Both named and resources.arsc-mapped images resolved; missing minute/second hands recorded cleanly.
+    assertTrue(stored.resourceFileMap.containsKey("sample_hour_hand"))
+    assertTrue(stored.resourceFileMap.containsKey("sample_dial_bg"))
+    assertTrue(stored.report.missingResources.containsAll(listOf("sample_minute_hand", "sample_second_hand")))
+
+    WatchFaceRegistry.init(context)
+    assertTrue(WatchFaceRegistry.faces.any { it.id == stored.id })
+    assertTrue(FaceAssetRepository.diagnostics.value.wffFaces.any { it.id == stored.id })
+
+    prefs.setSelectedFaceId(stored.id)
+    assertTrue(WatchFaceRegistry.deleteWff(context, stored.id))
+    assertFalse(WatchFaceRegistry.faces.any { it.id == stored.id })
+    assertFalse(prefs.selectedFaceId.value == stored.id)
+  }
+
+  @Test
+  fun `wff expression engine covers operators math string conversion caching and unknown fallback`() {
+    val time = FaceTimeData(
+      hour12 = 9, hour24 = 21, minute = 45, second = 12, millis = 250,
+      is24Hour = true, amPm = "PM", dayOfMonth = 7, year = 2026, monthNumber = 11, dayOfWeek = Calendar.SATURDAY,
+    )
+    val data = FaceData(time = time, battery = FaceBatteryData(levelPercent = 82, isCharging = false))
+    val ctx = com.example.faces.wff.WffEvalContext(data = data).apply { syncFromData(data) }
+
+    // Operators: bitwise, shift, ternary, arithmetic, comparison
+    val opExpr = com.example.faces.wff.WffExpression.compile("((1 << 3) | 4) & 12 == 12 ? (10 % 3) + 5 : 0")
+    assertEquals(6.0, com.example.faces.wff.WffExpression.evaluate(opExpr, ctx).asDouble(), 0.001)
+    assertEquals(0.0, com.example.faces.wff.WffExpression.evaluate(com.example.faces.wff.WffExpression.compile("~(0) + 1"), ctx).asDouble(), 0.001)
+
+    // Math, rounding & trig functions
+    val mathExpr = com.example.faces.wff.WffExpression.compile("round(fract(3.75) * 10) + clamp(25, 0, 10) + abs(-4) + sqrt(16)")
+    assertEquals(26.0, com.example.faces.wff.WffExpression.evaluate(mathExpr, ctx).asDouble(), 0.001)
+    val trigExpr = com.example.faces.wff.WffExpression.compile("round(cos(rad(0)) + sin(rad(90)) + deg(0))")
+    assertEquals(2.0, com.example.faces.wff.WffExpression.evaluate(trigExpr, ctx).asDouble(), 0.001)
+
+    // String, conditional & color functions
+    val strExpr = com.example.faces.wff.WffExpression.compile("ifelse([BATTERY_PERCENT] > 50, concat(toUpperCase(trim(' ok ')), ':', subText('abcdef', 1, 4)), 'low')")
+    assertEquals("OK:bcd", com.example.faces.wff.WffExpression.evaluate(strExpr, ctx).asString())
+    val argbExpr = com.example.faces.wff.WffExpression.compile("rgb(255, 128, 0)")
+    assertEquals(0xFFFF8000.toInt(), com.example.faces.wff.WffExpression.evaluate(argbExpr, ctx).asColorInt(0))
+
+    // LRU compile cache returns identical instance
+    val cachedAgain = com.example.faces.wff.WffExpression.compile("round(fract(3.75) * 10) + clamp(25, 0, 10) + abs(-4) + sqrt(16)")
+    assertTrue(mathExpr === cachedAgain)
+
+    // Input-dependency EvalCacheSlot skips re-evaluating when unrelated fields change
+    val batExpr = com.example.faces.wff.WffExpression.compile("[BATTERY_PERCENT] * 2")
+    val slot = com.example.faces.wff.EvalCacheSlot()
+    assertEquals(164.0, com.example.faces.wff.WffExpression.evaluateCached(slot, batExpr, ctx).asDouble(), 0.001)
+    assertTrue(slot.validFor(batExpr, ctx))
+    ctx.secondVer++ // Unrelated time change leaves battery slot valid!
+    assertTrue(slot.validFor(batExpr, ctx))
+    ctx.batteryVer++ // Battery change invalidates slot cleanly!
+    assertFalse(slot.validFor(batExpr, ctx))
+
+    // Unknown source/function safely returns 0.0 and records diagnostics
+    val badExpr = com.example.faces.wff.WffExpression.compile("[HEART_RATE] + mysteryFn(1)")
+    assertEquals(0.0, com.example.faces.wff.WffExpression.evaluate(badExpr, ctx).asDouble(), 0.001)
+    assertTrue(badExpr.unknownSources.contains("HEART_RATE"))
+    assertTrue(badExpr.unknownFunctions.contains("mysteryFn"))
+  }
+
+  @Test
+  fun `wff animation controller interpolates pauses cleanly when offscreen and respects cadence`() {
+    val ctrl = com.example.faces.wff.WffAnimationController()
+    val tr = com.example.faces.wff.WffTransform(
+      key = "ring_sweep",
+      target = "sweepAngle",
+      valueExpr = com.example.faces.wff.WffExpression.compile("0"),
+      animation = com.example.faces.wff.WffAnimationSpec(
+        durationSec = 1.0f,
+        interpolation = com.example.faces.wff.WffInterpolation.LINEAR,
+        repeat = 0,
+        fps = 20,
+      ),
+    )
+
+    // Initial baseline finishes immediately at start value
+    assertEquals(0f, ctrl.sample(tr, 0f, nowMs = 1000L, isAmbient = false), 0.01f)
+    assertFalse(ctrl.hasActiveAnimation())
+
+    // Data changes -> 500ms progress = 0.5 -> 50 deg
+    ctrl.sample(tr, 100f, nowMs = 1000L, isAmbient = false)
+    assertEquals(50f, ctrl.sample(tr, 100f, nowMs = 1500L, isAmbient = false), 0.5f)
+    assertTrue(ctrl.hasActiveAnimation())
+
+    // Screen turns off at 1500ms, resumes 5000ms later at 6500ms -> elapsed stays frozen at 500ms!
+    ctrl.pause(1500L)
+    ctrl.resume(6500L)
+    assertEquals(50f, ctrl.sample(tr, 100f, nowMs = 6500L, isAmbient = false), 0.5f)
+    // Finishes 500ms later at 7000ms
+    assertEquals(100f, ctrl.sample(tr, 100f, nowMs = 7000L, isAmbient = false), 0.01f)
+    assertFalse(ctrl.hasActiveAnimation())
+  }
+
+  @Test
+  fun `wff advanced xml parses user configs conditions animations bitmap fonts effects blend modes and cleans prefs`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    val xmlText = javaClass.classLoader!!.getResourceAsStream("wff_sample_advanced.xml")!!.bufferedReader().use { it.readText() }
+    val parsed = com.example.faces.wff.WffXmlParser.parse(xmlText, "wff_adv", "Advanced")
+    assertTrue(parsed is com.example.faces.wff.WffParseResult.Success)
+    val face = (parsed as com.example.faces.wff.WffParseResult.Success).face
+
+    // UserConfigurations parsed
+    assertEquals(3, face.userConfigs.size)
+    assertTrue(face.userConfigs[0] is com.example.faces.wff.WffUserConfig.ColorConfig)
+    assertTrue(face.userConfigs[1] is com.example.faces.wff.WffUserConfig.ListConfig)
+    assertTrue(face.userConfigs[2] is com.example.faces.wff.WffUserConfig.BooleanConfig)
+
+    // BitmapFonts & custom font ref
+    assertTrue(face.bitmapFonts.containsKey("lcd_digits"))
+    assertEquals(3, face.bitmapFonts["lcd_digits"]!!.glyphs.size)
+    assertTrue(face.referencedFonts.contains("custom_sans"))
+
+    // Condition branch + Shadow/Outline + BlendMode
+    val condNode = face.nodes.filterIsInstance<com.example.faces.wff.WffSceneNode.Condition>().first()
+    assertEquals(1, condNode.branches.size)
+    assertEquals(1, condNode.defaultChildren.size)
+    val fallbackText = condNode.defaultChildren.first() as com.example.faces.wff.WffSceneNode.PartText
+    assertNotNull(fallbackText.shadow)
+    assertNotNull(fallbackText.outline)
+    val imgNode = face.nodes.filterIsInstance<com.example.faces.wff.WffSceneNode.PartImage>().first()
+    assertEquals(com.example.faces.wff.WffBlendMode.MULTIPLY, imgNode.blendMode)
+
+    // Config runtime resolution & SharedPreferences persistence
+    prefs.setWffConfigValue("wff_adv", "theme_accent", "cyan")
+    prefs.setWffConfigValue("wff_adv", "show_seconds_ring", "FALSE")
+    val reloadedPrefs = AuraPrefs(context)
+    val saved = reloadedPrefs.getWffFaceConfig("wff_adv")
+    assertEquals("cyan", saved["theme_accent"])
+    assertEquals("FALSE", saved["show_seconds_ring"])
+
+    val runtime = com.example.faces.wff.WffConfigRuntime(face.userConfigs, saved)
+    val evalCtx = com.example.faces.wff.WffEvalContext(FaceData(), runtime)
+    val accentColor = com.example.faces.wff.WffExpression.evaluate(
+      com.example.faces.wff.WffExpression.compile("[CONFIGURATION.theme_accent.0]"),
+      evalCtx,
+    ).asColorInt(0)
+    assertEquals(0xFF00E5FF.toInt(), accentColor)
+    assertFalse(com.example.faces.wff.WffExpression.evaluateBool(condNode.branches.first().expression, evalCtx))
+
+    // Compatibility score (100% when all tags supported)
+    assertEquals(100, face.report.scorePercent)
+
+    // Hands + minute-only text face stays at EVERY_MINUTE in both modes
+    val handsOnlyXml = """
+      <WatchFace width="450" height="450">
+        <Scene>
+          <AnalogClock x="0" y="0" width="450" height="450">
+            <HourHand resource="h" x="0" y="0" width="20" height="100" />
+            <MinuteHand resource="m" x="0" y="0" width="20" height="150" />
+          </AnalogClock>
+          <DigitalClock x="0" y="300" width="450" height="50">
+            <TimeText format="HH:mm" />
+          </DigitalClock>
+        </Scene>
+      </WatchFace>
+    """.trimIndent()
+    val handsFace = (com.example.faces.wff.WffXmlParser.parse(handsOnlyXml, "h", "H") as com.example.faces.wff.WffParseResult.Success).face
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, com.example.faces.wff.WffExpression.updatePolicy(handsFace, FaceRenderMode.NORMAL))
+    assertEquals(FaceUpdatePolicy.EVERY_MINUTE, com.example.faces.wff.WffExpression.updatePolicy(handsFace, FaceRenderMode.AMBIENT))
+
+    prefs.deleteWffFaceConfigs("wff_adv")
+    assertTrue(prefs.getWffFaceConfig("wff_adv").isEmpty())
+  }
+
+  private fun buildMinimalTestArsc(
+    globalStrings: List<String>,
+    typeName: String,
+    entries: List<Pair<String, Int>>,
+  ): ByteArray {
+    fun encodeUtf8Pool(strings: List<String>): ByteArray {
+      val stringsData = java.io.ByteArrayOutputStream()
+      val offsets = IntArray(strings.size)
+      strings.forEachIndexed { idx, s ->
+        offsets[idx] = stringsData.size()
+        val utf8 = s.toByteArray(Charsets.UTF_8)
+        stringsData.write(s.length and 0x7F)
+        stringsData.write(utf8.size and 0x7F)
+        stringsData.write(utf8)
+        stringsData.write(0)
+      }
+      while ((stringsData.size() % 4) != 0) stringsData.write(0)
+      val headerSize = 28
+      val stringsStart = headerSize + strings.size * 4
+      val chunkSize = stringsStart + stringsData.size()
+      val buf = java.nio.ByteBuffer.allocate(chunkSize).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+      buf.putShort(0x0001) // RES_STRING_POOL_TYPE
+      buf.putShort(headerSize.toShort())
+      buf.putInt(chunkSize)
+      buf.putInt(strings.size)
+      buf.putInt(0) // styleCount
+      buf.putInt(1 shl 8) // UTF-8
+      buf.putInt(stringsStart)
+      buf.putInt(0)
+      offsets.forEach { buf.putInt(it) }
+      buf.put(stringsData.toByteArray())
+      return buf.array()
+    }
+
+    val globalPool = encodeUtf8Pool(globalStrings)
+    val typePool = encodeUtf8Pool(listOf(typeName))
+    val keyPool = encodeUtf8Pool(entries.map { it.first })
+
+    val typeHeaderSize = 24
+    val offsetsSize = entries.size * 4
+    val entriesBytes = java.io.ByteArrayOutputStream()
+    val entryBuf = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    val entryOffsets = IntArray(entries.size)
+    entries.forEachIndexed { idx, (_, globalIdx) ->
+      entryOffsets[idx] = entriesBytes.size()
+      entryBuf.clear()
+      entryBuf.putShort(8) // entry size
+      entryBuf.putShort(0) // flags
+      entryBuf.putInt(idx) // key index
+      entryBuf.putShort(8) // Res_value size
+      entryBuf.put(0)
+      entryBuf.put(0x03) // TYPE_STRING
+      entryBuf.putInt(globalIdx)
+      entriesBytes.write(entryBuf.array())
+    }
+    val typeChunkSize = typeHeaderSize + offsetsSize + entriesBytes.size()
+    val typeBuf = java.nio.ByteBuffer.allocate(typeChunkSize).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    typeBuf.putShort(0x0201) // RES_TABLE_TYPE_TYPE
+    typeBuf.putShort(typeHeaderSize.toShort())
+    typeBuf.putInt(typeChunkSize)
+    typeBuf.put(1) // type id = 1
+    typeBuf.put(0) // flags
+    typeBuf.putShort(0)
+    typeBuf.putInt(entries.size)
+    typeBuf.putInt(typeHeaderSize + offsetsSize) // entriesStart
+    typeBuf.putInt(4) // ResTable_config size
+    entryOffsets.forEach { typeBuf.putInt(it) }
+    typeBuf.put(entriesBytes.toByteArray())
+    val typeChunk = typeBuf.array()
+
+    val pkgHeaderSize = 288
+    val typeStringsOffset = pkgHeaderSize
+    val keyStringsOffset = pkgHeaderSize + typePool.size
+    val pkgSize = pkgHeaderSize + typePool.size + keyPool.size + typeChunk.size
+    val pkgBuf = java.nio.ByteBuffer.allocate(pkgSize).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    pkgBuf.putShort(0x0200) // RES_TABLE_PACKAGE_TYPE
+    pkgBuf.putShort(pkgHeaderSize.toShort())
+    pkgBuf.putInt(pkgSize)
+    pkgBuf.putInt(0x7F)
+    pkgBuf.position(pkgHeaderSize - 20)
+    pkgBuf.putInt(typeStringsOffset)
+    pkgBuf.putInt(0)
+    pkgBuf.putInt(keyStringsOffset)
+    pkgBuf.putInt(0)
+    pkgBuf.putInt(0)
+    pkgBuf.put(typePool)
+    pkgBuf.put(keyPool)
+    pkgBuf.put(typeChunk)
+    val pkgChunk = pkgBuf.array()
+
+    val rootSize = 12 + globalPool.size + pkgChunk.size
+    val rootBuf = java.nio.ByteBuffer.allocate(rootSize).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    rootBuf.putShort(0x0002) // RES_TABLE_TYPE
+    rootBuf.putShort(12)
+    rootBuf.putInt(rootSize)
+    rootBuf.putInt(1) // packageCount
+    rootBuf.put(globalPool)
+    rootBuf.put(pkgChunk)
+    return rootBuf.array()
+  }
 }

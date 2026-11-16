@@ -290,6 +290,57 @@ class AuraPrefs(context: Context) {
     _timerGoFullScreenOnStart.value = enabled
   }
 
+  private val _wffFaceConfigs = MutableStateFlow(loadAllWffConfigs())
+  val wffFaceConfigs: StateFlow<Map<String, Map<String, String>>> = _wffFaceConfigs.asStateFlow()
+
+  private fun loadAllWffConfigs(): Map<String, Map<String, String>> {
+    val result = LinkedHashMap<String, LinkedHashMap<String, String>>()
+    for ((rawKey, rawVal) in prefs.all) {
+      if (!rawKey.startsWith(KEY_WFF_CONFIG_PREFIX)) continue
+      val remainder = rawKey.removePrefix(KEY_WFF_CONFIG_PREFIX)
+      val sep = remainder.indexOf("::")
+      if (sep <= 0) continue
+      val faceId = remainder.substring(0, sep)
+      val configId = remainder.substring(sep + 2)
+      val value = rawVal as? String ?: continue
+      result.getOrPut(faceId) { LinkedHashMap() }[configId] = value
+    }
+    return result
+  }
+
+  /** Saves a single UserConfiguration choice for an imported WFF watch face. */
+  fun setWffConfigValue(faceId: String, configId: String, value: String) {
+    prefs.edit().putString("$KEY_WFF_CONFIG_PREFIX$faceId::$configId", value).apply()
+    val updated = _wffFaceConfigs.value.toMutableMap()
+    val faceMap = updated[faceId]?.toMutableMap() ?: LinkedHashMap()
+    faceMap[configId] = value
+    updated[faceId] = faceMap
+    _wffFaceConfigs.value = updated
+  }
+
+  /** Returns all saved UserConfiguration values for [faceId]. */
+  fun getWffFaceConfig(faceId: String): Map<String, String> =
+    _wffFaceConfigs.value[faceId].orEmpty()
+
+  /** Removes all saved UserConfiguration choices when an imported WFF watch face is deleted. */
+  fun deleteWffFaceConfigs(faceId: String) {
+    val prefix = "$KEY_WFF_CONFIG_PREFIX$faceId::"
+    val editor = prefs.edit()
+    var removedAny = false
+    for (k in prefs.all.keys) {
+      if (k.startsWith(prefix)) {
+        editor.remove(k)
+        removedAny = true
+      }
+    }
+    if (removedAny) {
+      editor.apply()
+      val updated = _wffFaceConfigs.value.toMutableMap()
+      updated.remove(faceId)
+      _wffFaceConfigs.value = updated
+    }
+  }
+
   /** Saves widget configuration for a specific appWidgetId. */
   fun saveWidgetConfig(widgetId: Int, styleId: String, colorId: String) {
     prefs.edit()
@@ -352,5 +403,6 @@ class AuraPrefs(context: Context) {
     private const val KEY_STANDBY_SHOW_TITLES = "standby_show_titles"
     private const val KEY_TIMER_FULLSCREEN_DEFAULT = "timer_fullscreen_default"
     private const val KEY_TIMER_FULLSCREEN_ON_START = "timer_fullscreen_on_start"
+    private const val KEY_WFF_CONFIG_PREFIX = "wff_cfg_"
   }
 }

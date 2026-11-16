@@ -21,7 +21,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,7 +100,11 @@ object FacesChiplet {
     val prefs = remember { CoreSingletons.prefs(context) }
     val selectedId by prefs.selectedFaceId.collectAsStateWithLifecycle()
     val accent by prefs.themeColor.collectAsStateWithLifecycle()
-    val activeFace = remember(selectedId) { WatchFaceRegistry.findById(selectedId) }
+    val faces by WatchFaceRegistry.facesFlow.collectAsStateWithLifecycle()
+    val activeFace = remember(selectedId, faces) { WatchFaceRegistry.findById(selectedId) }
+    val activeWffEntry = (activeFace as? com.example.faces.wff.WffFace)?.storedFace
+      ?.takeIf { it.face.userConfigs.isNotEmpty() }
+    var showConfigSheet by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
       modifier = modifier
@@ -124,7 +132,7 @@ object FacesChiplet {
             modifier = Modifier.padding(end = 4.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            items(WatchFaceRegistry.faces, key = { it.id }) { face ->
+            items(faces, key = { it.id }) { face ->
               FaceChip(
                 face = face,
                 selected = face.id == activeFace.id,
@@ -153,7 +161,7 @@ object FacesChiplet {
             contentPadding = PaddingValues(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            items(WatchFaceRegistry.faces, key = { it.id }) { face ->
+            items(faces, key = { it.id }) { face ->
               FaceChip(
                 face = face,
                 selected = face.id == activeFace.id,
@@ -163,7 +171,36 @@ object FacesChiplet {
           }
         }
       }
+
+      if (activeWffEntry != null) {
+        SmallFloatingActionButton(
+          onClick = { showConfigSheet = true },
+          containerColor = MaterialTheme.colorScheme.surfaceVariant,
+          contentColor = MaterialTheme.colorScheme.primary,
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .testTag("clock_wff_customize_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Tune,
+            contentDescription = "Customize watch face",
+          )
+        }
+      }
     }
+
+    if (showConfigSheet && activeWffEntry != null) {
+      com.example.faces.wff.WffConfigSheet(
+        entry = activeWffEntry,
+        onDismiss = { showConfigSheet = false },
+      )
+    }
+  }
+
+  /** Renders the Watch Faces picker and WFF import/management card inside Settings. */
+  @Composable
+  fun SettingsSection(modifier: Modifier = Modifier) {
+    FacesSettingsSection(modifier = modifier)
   }
 
   /** Renders a watch face for the Stand By screensaver in ambient mode. */
@@ -177,7 +214,8 @@ object FacesChiplet {
     remember { WatchFaceRegistry.init(context) }
     val selectedId by prefs.selectedFaceId.collectAsStateWithLifecycle()
     val accent by prefs.themeColor.collectAsStateWithLifecycle()
-    val face = remember(useSelectedFace, selectedId) {
+    val faces by WatchFaceRegistry.facesFlow.collectAsStateWithLifecycle()
+    val face = remember(useSelectedFace, selectedId, faces) {
       if (useSelectedFace) WatchFaceRegistry.findById(selectedId)
       else WatchFaceRegistry.findById("standby_digital")
     }

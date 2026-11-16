@@ -70,6 +70,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
 import com.example.earbud.EarbudChiplet
+import com.example.faces.FacesChiplet
 import com.example.standby.StandByChiplet
 import com.example.timer.TimerChiplet
 import com.example.ui.theme.OledBlack
@@ -417,7 +418,10 @@ fun SettingsScreen(
       }
     }
 
-    // 4. Stand By Screensaver & Calendar (owned by standby chiplet)
+    // 4. Watch Faces & WFF Import (owned by faces chiplet)
+    FacesChiplet.SettingsSection()
+
+    // 5. Stand By Screensaver & Calendar (owned by standby chiplet)
     StandByChiplet.SettingsSection(onOpenPreview = onPreviewStandBy)
 
     // 5. Diagnostics Entry

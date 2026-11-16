@@ -134,6 +134,9 @@ internal class DefinitionFace(
       target.dayOfMonth = cal.get(Calendar.DAY_OF_MONTH)
       target.dayNameShort = FaceTimeData.dayNameShortFor(cal)
       target.monthNameShort = FaceTimeData.monthNameShortFor(cal)
+      target.year = cal.get(Calendar.YEAR)
+      target.monthNumber = cal.get(Calendar.MONTH) + 1
+      target.dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
     }
   }
 }

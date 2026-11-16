@@ -1,0 +1,103 @@
+AuraClock Watch Face Format (WFF) Support Reference
+======================================================
+
+AuraClock runs imported Watch Face Format packages strictly offline on-device.
+Nothing talks to Google services, no watch pairing is required, and no code
+from imported APKs is ever executed.
+
+1. IMPORT FORMATS
+-----------------
+- .apk or .zip containing plain-text res/raw/watchface.xml (or watchface.xml)
+- Folder-free watchface.xml (plain-text XML; images/fonts are marked missing)
+- Binary compiled XML (AXML) is detected and rejected with an explanation
+- Image & Custom Font (.ttf, .otf, .ttc) resolution order:
+  1. Matching filenames under res/drawable*, res/mipmap*, res/font*, assets/, or root
+  2. Fallback via built-in resources.arsc reader for R8-shrunk resource paths
+     (e.g. res/ab.webp or res/aa.ttf)
+  3. Unresolved resources are skipped safely and logged in the compatibility report
+
+2. SUPPORTED ELEMENTS & ATTRIBUTES
+----------------------------------
+- WatchFace
+  - width, height, clipShape (CIRCLE, RECTANGLE, NONE), cornerRadiusX, cornerRadiusY
+- Metadata
+  - key, value (reads "title" / "name" for face display name)
+- UserConfigurations
+  - ColorConfiguration (with ColorOption swatches)
+  - ListConfiguration (with ListOption entries)
+  - BooleanConfiguration
+  - Live editing via the Customize settings bottom sheet, saved per face in SharedPreferences
+- BitmapFonts
+  - BitmapFont (name) containing Character and Word glyph image entries
+- Scene
+  - backgroundColor (hex or expression), Group children, Scene-level Condition, Variant, Transform
+- Group
+  - x, y, width, height, pivotX, pivotY, angle, scaleX, scaleY, alpha, visible/visibility
+- Condition / Expressions / Compare / Default
+  - Supports multi-branch Compare conditions and Default fallback inside Scene and Group
+  - Inline Condition expression="..." attribute also supported
+- AnalogClock
+  - HourHand, MinuteHand, SecondHand (resource, pivot, tintColor, scaleX/Y, alpha, Transform, Variant)
+  - Sweep (frequency) and Tick (duration, strength) motion policies
+- DigitalClock
+  - TimeText (format/timeFormat, hourFormat: 12 / 24 / SYNC_TO_DEVICE, align, size, color/expr, Shadow, Outline, BitmapFont)
+- PartImage
+  - x, y, width, height, pivot, angle, scaleX/Y, alpha, tintColor (static or expr)
+  - Image and Images frame children
+  - blendMode: SRC_OVER, MULTIPLY, SCREEN, ADD, OVERLAY, DARKEN, LIGHTEN, SRC_IN, SRC_ATOP, XOR
+- PartText
+  - Text + Font (family including custom TTF/OTF, BitmapFont, size, color/expr, weight, slant)
+  - Shadow (color, offsetX, offsetY, radius) and Outline (color, width)
+  - Template (%s, %d, %0Nd, %.Nf, %f, %%) + Parameter expressions
+- PartDraw
+  - Shapes: Ellipse, Rectangle, RoundRectangle, Arc (with Transforms), Line
+  - Fill (color or expr), Stroke (color or expr, thickness, cap)
+- Transform & Animation
+  - Targets: x, y, width, height, angle, scaleX, scaleY, pivotX, pivotY, alpha, visible/visibility, color, tintColor, backgroundColor, startAngle, sweepAngle, centerX, centerY
+  - Animation: duration, interpolation (LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, OVERSHOOT, CUBIC_BEZIER), controls, repeat (-1 or count), angleDirection (CLOCKWISE, COUNTER_CLOCKWISE, NONE), fps, from
+- Variant
+  - mode="AMBIENT" supporting geometry, visibility, alpha, scale, and color/tintColor overrides
+
+3. SUPPORTED DATA SOURCES
+-------------------------
+Time & Date:
+- HOUR_0_11, HOUR_0_11_Z, HOUR_1_12, HOUR_1_12_Z
+- HOUR_0_23, HOUR_0_23_Z, HOUR_1_24, HOUR_1_24_Z, HOUR
+- HOUR_0_11_TENS_DIGIT, HOUR_0_11_UNITS_DIGIT, HOUR_0_23_TENS_DIGIT, HOUR_0_23_UNITS_DIGIT
+- HOUR_0_11_MINUTE, HOUR_0_23_MINUTE
+- MINUTE, MINUTE_Z, MINUTE_TENS_DIGIT, MINUTE_UNITS_DIGIT, MINUTE_SECOND
+- SECOND, SECOND_Z, SECOND_TENS_DIGIT, SECOND_UNITS_DIGIT, SECOND_MILLISECOND, MILLISECOND
+- AMPM_STATE, AMPM_POSITION, AMPM_STRING, IS_24_HOUR_MODE
+- DAY, DAY_Z, DAY_OF_YEAR, DAY_HOUR, DAYS_IN_MONTH
+- MONTH, MONTH_Z, MONTH_0_11, MONTH_S, MONTH_F
+- YEAR, YEAR_S
+- DAY_OF_WEEK, DAY_OF_WEEK_S, DAY_OF_WEEK_F, FIRST_DAY_OF_WEEK
+- SECONDS_IN_DAY, UTC_TIMESTAMP
+- TIMEZONE, TIMEZONE_ABB, TIMEZONE_OFFSET, TIMEZONE_OFFSET_DST, IS_DAYLIGHT_SAVING_TIME
+
+Battery & User Settings:
+- BATTERY_PERCENT, BATTERY_CHARGING_STATUS, IS_BATTERY_CHARGING, BATTERY_IS_LOW
+- BATTERY_TEMPERATURE_CELSIUS, BATTERY_TEMPERATURE_FAHRENHEIT
+- CONFIGURATION.<id> and CONFIGURATION.<id>.<swatchIndex>
+
+4. EXPRESSIONS
+--------------
+- Operators: +  -  *  /  %  <<  >>  &  ^  |  ==  !=  <  <=  >  >=  &&  ||  !  ~  ?:  ( )
+- Conditional & ICU: ifelse, if, icuText, icuBestText
+- Math & Rounding: round, floor, ceil, fract, sin, cos, tan, asin, acos, atan, atan2, abs, sign, clamp, min, max, pow, sqrt, cbrt, log, log2, log10, log1p, exp, expm1, hypot, rad, deg, mod, rand, random
+- Strings & Formatting: subText, substring, textLength, strlen, strIndexOf, indexOf, toLowerCase, toUpperCase, trim, concat, numberFormat, format
+- Conversions & Colors: toInt, toFloat, toString, toBoolean, rgb, argb
+- Compiled ASTs are LRU-cached (512 entries) and evaluated only when their dependency inputs change.
+- Unknown sources/functions default safely (0.0 / "") and are recorded as PARTLY_DRAWN.
+
+5. PERFORMANCE & VISIBILITY POLICY
+----------------------------------
+- Animations pause/freeze immediately when the Clock/Stand By screen leaves RESUMED state.
+- Data-triggered transitions run at the animation's requested fps and stop ticking once finished.
+- Faces with only HourHand/MinuteHand and minute/static text stay at EVERY_MINUTE cadence.
+- In AMBIENT mode, cadence drops to EVERY_MINUTE and SecondHand layers are hidden.
+
+6. COMPATIBILITY REPORTING
+--------------------------
+- Each imported face reports a 0..100% compatibility score (drawn=1.0, partly drawn=0.5, skipped=0.0)
+  with full item breakdown in both "Face details" and Diagnostics -> Compatibility.

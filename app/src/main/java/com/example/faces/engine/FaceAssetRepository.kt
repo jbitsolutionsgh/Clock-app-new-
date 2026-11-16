@@ -6,6 +6,7 @@ import com.example.core.CoreSingletons
 import com.example.core.FaceDefinitionError
 import com.example.core.FaceDiagnosticsProvider
 import com.example.core.FaceEngineDiagnostics
+import com.example.core.WffCompatibilitySummary
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,6 +38,11 @@ internal object FaceAssetRepository : FaceDiagnosticsProvider {
       reloadLocked(context.applicationContext)
       loaded = true
     }
+  }
+
+  /** Updates the imported WFF face compatibility reports shown in Diagnostics. */
+  fun updateWffDiagnostics(wffFaces: List<WffCompatibilitySummary>) {
+    _diagnostics.value = _diagnostics.value.copy(wffFaces = wffFaces)
   }
 
   /** Returns a parsed [FaceDefinition] by id, or null if missing/invalid. */
@@ -86,7 +92,7 @@ internal object FaceAssetRepository : FaceDiagnosticsProvider {
     }
 
     cachedDefinitions = defs
-    _diagnostics.value = FaceEngineDiagnostics(
+    _diagnostics.value = _diagnostics.value.copy(
       loadedDefinitions = defs.values.map { it.id to it.name },
       errors = errors,
     )

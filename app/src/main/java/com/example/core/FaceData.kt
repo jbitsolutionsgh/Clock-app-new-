@@ -57,9 +57,26 @@ data class FaceDefinitionError(
   val reason: String,
 )
 
+data class WffSkippedDiagnostic(
+  val element: String,
+  val reason: String,
+)
+
+data class WffCompatibilitySummary(
+  val id: String,
+  val name: String,
+  val scorePercent: Int = 100,
+  val drawnCount: Int = 0,
+  val partlyDrawnCount: Int = 0,
+  val skippedCount: Int = 0,
+  val partlyDrawnItems: List<WffSkippedDiagnostic> = emptyList(),
+  val skippedItems: List<WffSkippedDiagnostic> = emptyList(),
+)
+
 data class FaceEngineDiagnostics(
   val loadedDefinitions: List<Pair<String, String>> = emptyList(),
   val errors: List<FaceDefinitionError> = emptyList(),
+  val wffFaces: List<WffCompatibilitySummary> = emptyList(),
 )
 
 /** Implemented by faces so DiagnosticsScreen can inspect loaded JSON definitions without importing faces. */
@@ -78,6 +95,9 @@ data class FaceTimeData(
   var dayOfMonth: Int = 1,
   var dayNameShort: String = "MON",
   var monthNameShort: String = "JAN",
+  var year: Int = 2026,
+  var monthNumber: Int = 1,
+  var dayOfWeek: Int = Calendar.MONDAY,
 ) {
   /** Copies all fields from [other] in place so frame loops reuse this instance without allocating. */
   fun copyFrom(other: FaceTimeData) {
@@ -91,6 +111,9 @@ data class FaceTimeData(
     dayOfMonth = other.dayOfMonth
     dayNameShort = other.dayNameShort
     monthNameShort = other.monthNameShort
+    year = other.year
+    monthNumber = other.monthNumber
+    dayOfWeek = other.dayOfWeek
   }
 
   companion object {
@@ -329,6 +352,9 @@ internal class CoreFaceDataSource(context: Context) : FaceDataSource {
         dayOfMonth = dom,
         dayNameShort = dow,
         monthNameShort = month,
+        year = cal.get(Calendar.YEAR),
+        monthNumber = cal.get(Calendar.MONTH) + 1,
+        dayOfWeek = cal.get(Calendar.DAY_OF_WEEK),
       )
     }
   }

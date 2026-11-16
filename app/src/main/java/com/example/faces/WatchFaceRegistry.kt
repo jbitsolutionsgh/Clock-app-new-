@@ -4,12 +4,22 @@ import android.content.Context
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import com.example.R
+import com.example.core.CoreSingletons
+import com.example.core.WffCompatibilitySummary
+import com.example.core.WffSkippedDiagnostic
 import com.example.faces.engine.DefinitionFace
 import com.example.faces.engine.FaceAssetRepository
+import com.example.faces.wff.WffFace
+import com.example.faces.wff.WffImportResult
+import com.example.faces.wff.WffStorageManager
+import com.example.faces.wff.WffStoredFace
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Single registry list of all available watch faces, combining data-driven [DefinitionFace]
- * assets from assets/faces/ alongside the existing [ImageDialFace] collection.
+ * assets, the existing [ImageDialFace] collection, and user-imported [WffFace] packages.
  */
 internal object WatchFaceRegistry {
 
@@ -283,18 +293,69 @@ internal object WatchFaceRegistry {
     MinimalAnalogFace(),
   )
 
-  @Volatile
-  private var cachedFaces: List<WatchFace> = buildFaceList()
+  private val _wffFaces = MutableStateFlow<List<WffStoredFace>>(emptyList())
+  val wffFacesFlow: StateFlow<List<WffStoredFace>> = _wffFaces.asStateFlow()
 
-  /** Loads JSON definitions from assets/faces/ and refreshes the registered face list. */
+  private val _facesFlow = MutableStateFlow(buildFaceList(emptyList()))
+  val facesFlow: StateFlow<List<WatchFace>> = _facesFlow.asStateFlow()
+
+  /** Loads JSON definitions and imported WFF packages, refreshing the registered face list. */
   fun init(context: Context) {
-    FaceAssetRepository.ensureInitialized(context)
-    cachedFaces = buildFaceList()
+    val appCtx = context.applicationContext
+    FaceAssetRepository.ensureInitialized(appCtx)
+    reloadWff(appCtx)
+  }
+
+  /** Reloads imported WFF packages from private storage and syncs Diagnostics + face list. */
+  fun reloadWff(context: Context) {
+    val appCtx = context.applicationContext
+    FaceAssetRepository.ensureInitialized(appCtx)
+    val stored = WffStorageManager.loadAll(appCtx)
+    _wffFaces.value = stored
+    _facesFlow.value = buildFaceList(stored)
+    FaceAssetRepository.updateWffDiagnostics(
+      stored.map { entry ->
+        WffCompatibilitySummary(
+          id = entry.id,
+          name = entry.displayName,
+          scorePercent = entry.report.scorePercent,
+          drawnCount = entry.report.drawnCount,
+          partlyDrawnCount = entry.report.partlyDrawnCount,
+          skippedCount = entry.report.skippedCount,
+          partlyDrawnItems = entry.report.partlyDrawnItems.map { WffSkippedDiagnostic(it.element, it.reason) },
+          skippedItems = entry.report.skippedItems.map { WffSkippedDiagnostic(it.element, it.reason) },
+        )
+      },
+    )
+  }
+
+  /** Imports a WFF file or archive and updates the registry when successful. */
+  fun importWff(context: Context, uri: android.net.Uri): WffImportResult {
+    val result = WffStorageManager.importFromUri(context.applicationContext, uri)
+    if (result is WffImportResult.Success) {
+      reloadWff(context)
+    }
+    return result
+  }
+
+  /** Deletes an imported WFF watch face by [id] and falls back cleanly if it was active. */
+  fun deleteWff(context: Context, id: String): Boolean {
+    val appCtx = context.applicationContext
+    val deleted = WffStorageManager.deleteFace(appCtx, id)
+    if (deleted) {
+      val prefs = CoreSingletons.prefs(appCtx)
+      prefs.deleteWffFaceConfigs(id)
+      reloadWff(appCtx)
+      if (prefs.selectedFaceId.value == id) {
+        faces.firstOrNull()?.let { prefs.setSelectedFaceId(it.id) }
+      }
+    }
+    return deleted
   }
 
   /** Returns all picker watch faces in display order. */
   val faces: List<WatchFace>
-    get() = cachedFaces
+    get() = _facesFlow.value
 
   /** Looks up a face by ID across picker faces and Stand By system faces, defaulting to the first registered face. */
   fun findById(id: String?): WatchFace =
@@ -302,8 +363,8 @@ internal object WatchFaceRegistry {
       ?: systemFaces.firstOrNull { it.id == id }
       ?: faces.first()
 
-  private fun buildFaceList(): List<WatchFace> {
-    val result = ArrayList<WatchFace>(16)
+  private fun buildFaceList(wffStored: List<WffStoredFace>): List<WatchFace> {
+    val result = ArrayList<WatchFace>(16 + wffStored.size)
     val usedIds = HashSet<String>()
 
     fun addDefinitionOrFallback(id: String, fallback: (() -> WatchFace)? = null) {
@@ -337,6 +398,13 @@ internal object WatchFaceRegistry {
     for (def in FaceAssetRepository.allDefinitions()) {
       if (usedIds.add(def.id)) {
         result += DefinitionFace(def)
+      }
+    }
+
+    // Append imported Watch Face Format packages.
+    for (stored in wffStored) {
+      if (usedIds.add(stored.id)) {
+        result += WffFace(stored)
       }
     }
 

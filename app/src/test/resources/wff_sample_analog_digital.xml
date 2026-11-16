@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450" clipShape="CIRCLE">
+  <Metadata key="title" value="Classroom Hybrid WFF" />
+  <Metadata key="author" value="AuraClock Test" />
+  <Scene backgroundColor="#FF0A0F1A">
+    <PartImage x="0" y="0" width="450" height="450">
+      <Image resource="sample_dial_bg" />
+    </PartImage>
+
+    <PartDraw x="25" y="25" width="400" height="400">
+      <Ellipse x="0" y="0" width="400" height="400">
+        <Stroke color="#FF3B82F6" thickness="4" />
+      </Ellipse>
+    </PartDraw>
+
+    <DigitalClock x="100" y="130" width="250" height="60">
+      <TimeText format="HH:mm:ss" hourFormat="24" x="0" y="0" width="250" height="60" align="CENTER">
+        <Font family="sans-serif" size="34" color="#FFFFFFFF" weight="BOLD" />
+      </TimeText>
+    </DigitalClock>
+
+    <PartText x="115" y="300" width="220" height="44">
+      <Variant mode="AMBIENT" target="alpha" value="160" />
+      <Text align="CENTER">
+        <Font family="sans-serif" size="20" color="#FF94A3B8">
+          <Template>%s %d - %d%%</Template>
+          <Parameter expression="[DAY_OF_WEEK_S]" />
+          <Parameter expression="[DAY]" />
+          <Parameter expression="[BATTERY_PERCENT]" />
+        </Font>
+      </Text>
+    </PartText>
+
+    <AnalogClock x="0" y="0" width="450" height="450">
+      <HourHand resource="sample_hour_hand" x="215" y="105" width="20" height="120" pivotX="0.5" pivotY="1.0" />
+      <MinuteHand resource="sample_minute_hand" x="219" y="65" width="12" height="160" pivotX="0.5" pivotY="1.0" />
+      <SecondHand resource="sample_second_hand" x="223" y="45" width="4" height="185" pivotX="0.5" pivotY="0.97">
+        <Sweep frequency="15" />
+      </SecondHand>
+    </AnalogClock>
+
+    <ComplicationSlot slotId="1" x="50" y="200" width="80" height="80" />
+  </Scene>
+</WatchFace>
