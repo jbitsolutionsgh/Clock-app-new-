@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -112,10 +113,6 @@ internal class WffFace(
     val savedPhotos = allPhotos[storedFace.id].orEmpty()
     val showEventTitles by prefs.standByShowEventTitles.collectAsStateWithLifecycle()
 
-    val photoBitmaps = remember(storedFace.id, savedPhotos) {
-      WffPhotoManager.decodeFacePhotos(context, storedFace.id, savedPhotos)
-    }
-
     val needs = remember(storedFace.id, activeProviders) {
       WffExpression.scanDataNeeds(storedFace.face, activeProviders)
     }
@@ -150,6 +147,8 @@ internal class WffFace(
 
     var stepPermissionGranted by remember(storedFace.id) { mutableStateOf(sensorSource.hasStepPermission()) }
     var dismissedStepBanner by remember(storedFace.id) { mutableStateOf(false) }
+    var heartRatePermissionGranted by remember(storedFace.id) { mutableStateOf(sensorSource.hasHeartRatePermission()) }
+    var dismissedHeartRateBanner by remember(storedFace.id) { mutableStateOf(false) }
 
     val stepPermissionLauncher = rememberLauncherForActivityResult(
       contract = ActivityResultContracts.RequestPermission(),
@@ -158,13 +157,22 @@ internal class WffFace(
       sensorSource.refreshDiagnostics()
     }
 
+    val heartRatePermissionLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+      heartRatePermissionGranted = granted || sensorSource.hasHeartRatePermission()
+      sensorSource.refreshDiagnostics()
+    }
+
     DisposableEffect(lifecycleOwner, storedFace.id) {
       val observer = LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
           visibleCount.intValue += 1
           val perm = sensorSource.hasStepPermission()
-          if (perm != stepPermissionGranted) {
+          val hrPerm = sensorSource.hasHeartRatePermission()
+          if (perm != stepPermissionGranted || hrPerm != heartRatePermissionGranted) {
             stepPermissionGranted = perm
+            heartRatePermissionGranted = hrPerm
             sensorSource.refreshDiagnostics()
           }
         }
@@ -184,7 +192,7 @@ internal class WffFace(
       transitionWake.tryEmit(Unit)
     }
 
-    LaunchedEffect(lifecycleOwner, storedFace.id, needs, effectivePolicy, renderMode, stepPermissionGranted) {
+    LaunchedEffect(lifecycleOwner, storedFace.id, needs, effectivePolicy, renderMode, stepPermissionGranted, heartRatePermissionGranted) {
       val hasAnyAnim = hasAnyAnimation(storedFace.face)
       val sweepFps = maxSweepFrequency(storedFace.face)
       val hasTimeMillis = usesSubSecondTime(storedFace.face)
@@ -272,7 +280,7 @@ internal class WffFace(
         nowElapsedMsProvider = { nowElapsedMs.longValue },
         mode = renderMode,
         complicationProviders = activeProviders,
-        photoBitmaps = photoBitmaps,
+        savedPhotos = savedPhotos,
         photoTapCounts = photoTapCounts,
         visibleCount = visibleCount.intValue,
         showEventTitles = showEventTitles,
@@ -293,38 +301,84 @@ internal class WffFace(
         sensorSource.hasStepHardware() &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
-      if (showStepPrompt) {
-        Surface(
-          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
-          shape = RoundedCornerShape(14.dp),
+      val showHeartRatePrompt = renderMode == FaceRenderMode.NORMAL &&
+        FaceDataNeed.HEART_RATE in needs &&
+        !heartRatePermissionGranted &&
+        !dismissedHeartRateBanner &&
+        sensorSource.hasHeartRateHardware()
+
+      if (showStepPrompt || showHeartRatePrompt) {
+        Column(
           modifier = Modifier
             .align(Alignment.BottomCenter)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("wff_step_permission_banner"),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Text(
-              text = "Allow step access for live steps on this face",
-              style = MaterialTheme.typography.bodySmall,
-              color = Color.White,
-              modifier = Modifier.weight(1f),
-            )
-            Button(
-              onClick = { stepPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) },
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-              modifier = Modifier.testTag("wff_allow_steps_button"),
+          if (showStepPrompt) {
+            Surface(
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+              shape = RoundedCornerShape(14.dp),
+              modifier = Modifier.testTag("wff_step_permission_banner"),
             ) {
-              Text("Allow", style = MaterialTheme.typography.labelMedium)
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  text = "Allow step access for live steps on this face",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color.White,
+                  modifier = Modifier.weight(1f),
+                )
+                Button(
+                  onClick = { stepPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) },
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                  modifier = Modifier.testTag("wff_allow_steps_button"),
+                ) {
+                  Text("Allow", style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(
+                  onClick = { dismissedStepBanner = true },
+                  contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                ) {
+                  Text("Later", style = MaterialTheme.typography.labelMedium)
+                }
+              }
             }
-            TextButton(
-              onClick = { dismissedStepBanner = true },
-              contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+          }
+          if (showHeartRatePrompt) {
+            Surface(
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+              shape = RoundedCornerShape(14.dp),
+              modifier = Modifier.testTag("wff_heart_rate_permission_banner"),
             ) {
-              Text("Later", style = MaterialTheme.typography.labelMedium)
+              Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  text = "Allow heart rate access for live BPM on this face",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = Color.White,
+                  modifier = Modifier.weight(1f),
+                )
+                Button(
+                  onClick = { heartRatePermissionLauncher.launch(sensorSource.heartRatePermission()) },
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                  modifier = Modifier.testTag("wff_allow_heart_rate_button"),
+                ) {
+                  Text("Allow", style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(
+                  onClick = { dismissedHeartRateBanner = true },
+                  contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                ) {
+                  Text("Later", style = MaterialTheme.typography.labelMedium)
+                }
+              }
             }
           }
         }

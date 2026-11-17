@@ -72,8 +72,8 @@ Time & Date (AuraClock data):
 - SECONDS_IN_DAY, UTC_TIMESTAMP, TIMEZONE*
 
 Phone Sensors (Real phone sensor — active ONLY while visible on screen):
-- STEP_COUNT, STEP_GOAL, STEP_PERCENT (requests ACTIVITY_RECOGNITION only if needed)
-- HEART_RATE, HEART_RATE_Z, HEART_RATE_IS_AVAILABLE
+- STEP_COUNT, STEP_GOAL, STEP_PERCENT (steps since first seen today; requests ACTIVITY_RECOGNITION only if needed)
+- HEART_RATE, HEART_RATE_Z, HEART_RATE_IS_AVAILABLE (requests BODY_SENSORS / READ_HEART_RATE only when a face uses heart rate)
 - LIGHT_LEVEL, ILLUMINANCE
 - AMBIENT_PRESSURE, PRESSURE, PRESSURE_HPA
 - ACCELEROMETER_IS_SUPPORTED, ACCELEROMETER_X/Y/Z, ACCELEROMETER_ANGLE_X/Y/Z/XY
@@ -91,6 +91,7 @@ Offline Unreachable Data (No data):
 ----------------------------
 - Full WFF operator set, conditional/ICU, math/trig, string formatting, conversion & color functions.
 - Compiled ASTs are LRU-cached (512 entries) and re-evaluated only when dependency inputs change.
+- User Photos apply EXIF orientation upright on import and decode at the slot's pixel size (max 1080px longest side).
 - Animations and SensorManager listeners register strictly while visible (RESUMED) and unregister
   immediately when leaving the clock screen or turning the screen off.
 
@@ -98,4 +99,5 @@ Offline Unreachable Data (No data):
 ------------------------------
 - Each imported face reports a 0..100% compatibility score plus per-source provenance
   ("Real phone sensor", "AuraClock data", or "No data") in Face details and Diagnostics.
-- Diagnostics -> Phone Sensors shows live hardware & permission status and active listener count.
+- Diagnostics -> Phone Sensors shows live hardware & permission status ("Available", "Permission needed",
+  "No hardware"), daily steps ("steps since first seen today"), and active listener count.

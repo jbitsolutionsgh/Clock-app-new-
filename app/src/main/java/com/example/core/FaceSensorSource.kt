@@ -41,6 +41,7 @@ data class FaceSensorDiagnostics(
   val pressure: SensorAvailability = SensorAvailability.NO_HARDWARE,
   val accelerometer: SensorAvailability = SensorAvailability.NO_HARDWARE,
   val stepPermissionGranted: Boolean = false,
+  val heartRatePermissionGranted: Boolean = false,
   val activeListenersCount: Int = 0,
 )
 
@@ -52,6 +53,7 @@ data class FaceSensorData(
   val stepHardwarePresent: Boolean = false,
   val heartRate: Int = 0,
   val heartRateAvailable: Boolean = false,
+  val hasHeartRatePermission: Boolean = false,
   val heartRateHardwarePresent: Boolean = false,
   val lightLux: Float = 0f,
   val lightAvailable: Boolean = false,
@@ -69,6 +71,9 @@ interface FaceSensorSource {
   fun observeSensors(requested: Set<FaceSensorType>): Flow<FaceSensorData>
   fun hasStepPermission(): Boolean
   fun hasStepHardware(): Boolean
+  fun hasHeartRatePermission(): Boolean
+  fun hasHeartRateHardware(): Boolean
+  fun heartRatePermission(): String
   fun refreshDiagnostics()
 }
 
@@ -102,6 +107,15 @@ internal class CoreFaceSensorSource(
   override fun hasStepHardware(): Boolean =
     sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 
+  override fun heartRatePermission(): String =
+    if (Build.VERSION.SDK_INT >= 36) PERMISSION_READ_HEART_RATE else Manifest.permission.BODY_SENSORS
+
+  override fun hasHeartRatePermission(): Boolean =
+    ContextCompat.checkSelfPermission(appContext, heartRatePermission()) == PackageManager.PERMISSION_GRANTED
+
+  override fun hasHeartRateHardware(): Boolean =
+    sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE) != null
+
   override fun refreshDiagnostics() {
     _diagnostics.value = buildDiagnostics(activeCount)
   }
@@ -109,7 +123,8 @@ internal class CoreFaceSensorSource(
   override fun observeSensors(requested: Set<FaceSensorType>): Flow<FaceSensorData> = callbackFlow {
     val stepHw = hasStepHardware()
     val stepPerm = hasStepPermission()
-    val hrHw = sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE) != null
+    val hrHw = hasHeartRateHardware()
+    val hrPerm = hasHeartRatePermission()
     val lightHw = sensorManager?.getDefaultSensor(Sensor.TYPE_LIGHT) != null
     val pressureHw = sensorManager?.getDefaultSensor(Sensor.TYPE_PRESSURE) != null
     val accelHw = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
@@ -119,6 +134,7 @@ internal class CoreFaceSensorSource(
       stepGoal = prefs.stepGoal.value,
       hasStepPermission = stepPerm,
       stepHardwarePresent = stepHw,
+      hasHeartRatePermission = hrPerm,
       heartRateHardwarePresent = hrHw,
       lightAvailable = false,
       pressureAvailable = false,
@@ -185,6 +201,7 @@ internal class CoreFaceSensorSource(
     fun tryRegister(type: FaceSensorType, androidSensorType: Int) {
       if (type !in requested) return
       if (type == FaceSensorType.STEP_COUNTER && !hasStepPermission()) return
+      if (type == FaceSensorType.HEART_RATE && !hasHeartRatePermission()) return
       val sensor = mgr.getDefaultSensor(androidSensorType) ?: return
       val ok = runCatching {
         mgr.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
@@ -223,10 +240,12 @@ internal class CoreFaceSensorSource(
       !stepPerm -> SensorAvailability.PERMISSION_NEEDED
       else -> SensorAvailability.AVAILABLE
     }
-    val hrStatus = if (mgr?.getDefaultSensor(Sensor.TYPE_HEART_RATE) != null) {
-      SensorAvailability.AVAILABLE
-    } else {
-      SensorAvailability.NO_HARDWARE
+    val hrPerm = hasHeartRatePermission()
+    val hrSensor = mgr?.getDefaultSensor(Sensor.TYPE_HEART_RATE)
+    val hrStatus = when {
+      hrSensor == null -> SensorAvailability.NO_HARDWARE
+      !hrPerm -> SensorAvailability.PERMISSION_NEEDED
+      else -> SensorAvailability.AVAILABLE
     }
     val lightStatus = if (mgr?.getDefaultSensor(Sensor.TYPE_LIGHT) != null) {
       SensorAvailability.AVAILABLE
@@ -250,11 +269,13 @@ internal class CoreFaceSensorSource(
       pressure = pressureStatus,
       accelerometer = accelStatus,
       stepPermissionGranted = stepPerm,
+      heartRatePermissionGranted = hrPerm,
       activeListenersCount = active,
     )
   }
 
   companion object {
+    private const val PERMISSION_READ_HEART_RATE = "android.permission.health.READ_HEART_RATE"
     /** Returns an integer YYYYDDD day key for rollover comparison. */
     fun currentDayKey(cal: Calendar = Calendar.getInstance()): Int =
       cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR)

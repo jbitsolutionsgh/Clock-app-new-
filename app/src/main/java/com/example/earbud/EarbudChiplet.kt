@@ -149,6 +149,7 @@ object EarbudChiplet {
     val faceDiagProvider = remember { CoreSingletons.faceDiagnosticsProvider }
     val faceDiag by (faceDiagProvider?.diagnostics
       ?: remember { MutableStateFlow(FaceEngineDiagnostics()) }).collectAsStateWithLifecycle()
+    val prefs = remember { CoreSingletons.prefs(context) }
     val sensorSource = remember { CoreSingletons.sensorSource(context) }
     val sensorDiag by sensorSource.diagnostics.collectAsStateWithLifecycle()
 
@@ -315,7 +316,8 @@ object EarbudChiplet {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-          SensorStatusLine("Steps (Counter)", sensorDiag.steps, "diag_sensor_steps")
+          val lastDailySteps by prefs.lastDailySteps.collectAsStateWithLifecycle()
+          SensorStatusLine("Steps ($lastDailySteps steps since first seen today)", sensorDiag.steps, "diag_sensor_steps")
           SensorStatusLine("Heart Rate", sensorDiag.heartRate, "diag_sensor_heart_rate")
           SensorStatusLine("Ambient Light", sensorDiag.light, "diag_sensor_light")
           SensorStatusLine("Barometer (Pressure)", sensorDiag.pressure, "diag_sensor_pressure")

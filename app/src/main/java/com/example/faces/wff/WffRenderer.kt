@@ -62,7 +62,7 @@ internal object WffRenderer {
     nowElapsedMsProvider: () -> Long,
     mode: FaceRenderMode,
     complicationProviders: Map<String, AuraComplicationProvider> = emptyMap(),
-    photoBitmaps: Map<String, List<Bitmap>> = emptyMap(),
+    savedPhotos: Map<String, List<String>> = emptyMap(),
     photoTapCounts: Map<String, Int> = emptyMap(),
     visibleCount: Int = 0,
     showEventTitles: Boolean = true,
@@ -70,6 +70,7 @@ internal object WffRenderer {
     onComplicationTap: (String, AuraComplicationProvider) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
   ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val density = LocalDensity.current
     val scratch = remember(face.id) { WffDrawHelpers.DrawScratch() }
     val customFonts = remember(face.id, fontFileMap) {
@@ -92,6 +93,19 @@ internal object WffRenderer {
           imagesDir = imagesDir,
           resourceFileMap = resourceFileMap,
           stageScale = stageScale,
+        )
+      }
+
+      val photoSlotSizes = remember(face.id, stageScale) {
+        WffDrawHelpers.computePhotoSlotTargetSizes(face, stageScale, WffPhotoManager.MAX_PHOTO_SIDE_PX)
+      }
+
+      val photoBitmaps = remember(face.id, savedPhotos, photoSlotSizes) {
+        WffPhotoManager.decodeFacePhotos(
+          context = context,
+          faceId = face.id,
+          savedPhotosByConfig = savedPhotos,
+          slotSizesByConfigId = photoSlotSizes,
         )
       }
 

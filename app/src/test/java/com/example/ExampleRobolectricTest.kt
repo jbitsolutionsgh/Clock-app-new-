@@ -1014,6 +1014,170 @@ class ExampleRobolectricTest {
     }
   }
 
+  @Test
+  fun `photos apply exif rotation upright on import and decode at slot pixel size up to 1080px`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val faceId = "test_photo_exif_face"
+    val configId = "bg_photo"
+    val srcFile = java.io.File.createTempFile("rotated_sample", ".jpg", context.cacheDir)
+    try {
+      // Save a wide 1600x800 landscape JPEG with EXIF ORIENTATION_ROTATE_90 -> upright should be portrait 540x1080
+      val rawBmp = android.graphics.Bitmap.createBitmap(1600, 800, android.graphics.Bitmap.Config.ARGB_8888)
+      val canvas = android.graphics.Canvas(rawBmp)
+      canvas.drawColor(android.graphics.Color.BLUE)
+      val topHalfPaint = android.graphics.Paint().apply { color = android.graphics.Color.RED }
+      canvas.drawRect(0f, 0f, 800f, 800f, topHalfPaint)
+      java.io.FileOutputStream(srcFile).use { fos ->
+        rawBmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fos)
+      }
+      rawBmp.recycle()
+
+      val exif = android.media.ExifInterface(srcFile.absolutePath)
+      exif.setAttribute(
+        android.media.ExifInterface.TAG_ORIENTATION,
+        android.media.ExifInterface.ORIENTATION_ROTATE_90.toString(),
+      )
+      exif.saveAttributes()
+
+      val importedNames = com.example.faces.wff.WffPhotoManager.importPhotos(
+        context = context,
+        faceId = faceId,
+        configId = configId,
+        uris = listOf(android.net.Uri.fromFile(srcFile)),
+      )
+      assertEquals(1, importedNames.size)
+
+      val storedFile = java.io.File(
+        com.example.faces.wff.WffPhotoManager.photosDir(context, faceId, configId),
+        importedNames.first(),
+      )
+      val storedBounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      android.graphics.BitmapFactory.decodeFile(storedFile.absolutePath, storedBounds)
+      assertTrue("Expected rotated portrait height > width, got ${storedBounds.outWidth}x${storedBounds.outHeight}", storedBounds.outHeight > storedBounds.outWidth)
+      assertEquals(1080, maxOf(storedBounds.outWidth, storedBounds.outHeight))
+
+      // Slot smaller than 1080 decodes at slot size; slot larger than 1080 caps longest side at 1080
+      val smallDecoded = com.example.faces.wff.WffPhotoManager.decodeFacePhotos(
+        context = context,
+        faceId = faceId,
+        savedPhotosByConfig = mapOf(configId to importedNames),
+        slotSizesByConfigId = mapOf(configId to (240 to 240)),
+      )[configId]!!.first()
+      assertTrue("Expected <= 240 longest side for small slot, got ${smallDecoded.width}x${smallDecoded.height}", maxOf(smallDecoded.width, smallDecoded.height) <= 240)
+      smallDecoded.recycle()
+
+      val hugeFace = com.example.faces.wff.WffWatchFace(
+        id = faceId,
+        name = "Photo Test",
+        width = 450f,
+        height = 450f,
+        clipShape = com.example.faces.wff.WffClipShape.NONE,
+        cornerRadiusX = 0f,
+        cornerRadiusY = 0f,
+        backgroundColor = android.graphics.Color.BLACK,
+        backgroundColorExpr = null,
+        sceneTransforms = emptyList(),
+        sceneVariants = emptyList(),
+        nodes = listOf(
+          com.example.faces.wff.WffSceneNode.PartImage(
+            x = 0f,
+            y = 0f,
+            width = 450f,
+            height = 450f,
+            pivotX = 0.5f,
+            pivotY = 0.5f,
+            angle = 0f,
+            scaleX = 1f,
+            scaleY = 1f,
+            alpha = 255,
+            visible = true,
+            resources = emptyList(),
+            photos = com.example.faces.wff.WffPhotosSpec(
+              sourceExpr = null,
+              configId = configId,
+              defaultResource = null,
+              changeOnTap = true,
+              changeOnVisible = false,
+              changeAfterEvery = 1,
+            ),
+            tintColor = null,
+            tintColorExpr = null,
+            blendMode = com.example.faces.wff.WffBlendMode.SRC_OVER,
+            transforms = emptyList(),
+            variants = emptyList(),
+          ),
+        ),
+        userConfigs = emptyList(),
+        flavors = null,
+        bitmapFonts = emptyMap(),
+        stringResources = emptyMap(),
+        localizationCalendar = null,
+        localizationLocales = null,
+        metadata = emptyMap(),
+        usedSources = emptySet(),
+        report = com.example.faces.wff.WffCompatibilityReport(emptyList()),
+      )
+      val hugeSlotMap = com.example.faces.wff.WffDrawHelpers.computePhotoSlotTargetSizes(hugeFace, stageScale = 4.0f)
+      assertEquals(1080, hugeSlotMap[configId]!!.first)
+      assertEquals(1080, hugeSlotMap[configId]!!.second)
+    } finally {
+      srcFile.delete()
+      com.example.faces.wff.WffPhotoManager.clearConfigPhotos(context, faceId, configId)
+    }
+  }
+
+  @Test
+  fun `heart rate requires both hardware and permission before reporting available or registering`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val app = context.applicationContext as android.app.Application
+    val prefs = AuraPrefs(context)
+    val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager
+    val sensorSource = com.example.core.CoreFaceSensorSource(context, prefs)
+    val hrPerm = sensorSource.heartRatePermission()
+
+    // Case 1: No hardware -> NO_HARDWARE
+    sensorSource.refreshDiagnostics()
+    assertEquals(com.example.core.SensorAvailability.NO_HARDWARE, sensorSource.diagnostics.value.heartRate)
+
+    // Case 2: Hardware present, permission denied -> PERMISSION_NEEDED and listener NOT registered
+    val mockHrSensor = org.robolectric.shadows.ShadowSensor.newInstance(android.hardware.Sensor.TYPE_HEART_RATE)
+    org.robolectric.Shadows.shadowOf(sensorManager).addSensor(mockHrSensor)
+    org.robolectric.Shadows.shadowOf(app).denyPermissions(hrPerm)
+    sensorSource.refreshDiagnostics()
+    assertEquals(com.example.core.SensorAvailability.PERMISSION_NEEDED, sensorSource.diagnostics.value.heartRate)
+    assertFalse(sensorSource.hasHeartRatePermission())
+
+    val deniedJob = launch {
+      sensorSource.observeSensors(setOf(com.example.core.FaceSensorType.HEART_RATE)).collect { }
+    }
+    kotlinx.coroutines.delay(40)
+    assertEquals(0, sensorSource.diagnostics.value.activeListenersCount)
+    deniedJob.cancel()
+    deniedJob.join()
+
+    // Case 3: Hardware present AND permission granted -> AVAILABLE and registers while visible only
+    org.robolectric.Shadows.shadowOf(app).grantPermissions(hrPerm)
+    sensorSource.refreshDiagnostics()
+    assertEquals(com.example.core.SensorAvailability.AVAILABLE, sensorSource.diagnostics.value.heartRate)
+    assertTrue(sensorSource.hasHeartRatePermission())
+
+    val hrXml = """
+      <WatchFace width="450" height="450"><Scene>
+        <PartText x="0" y="0" width="200" height="40"><Text><Font family="SYNC_TO_DEVICE" size="24" color="#FFFFFFFF">
+          <Template>%s</Template><Parameter expression="[HEART_RATE]" />
+        </Font></Text></PartText>
+      </Scene></WatchFace>
+    """.trimIndent()
+    val hrFace = (com.example.faces.wff.WffXmlParser.parse(hrXml, "hr_test", "HR", emptyMap()) as com.example.faces.wff.WffParseResult.Success).face
+    val provOk = com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(hrFace, sensorSource.diagnostics.value, emptyMap())
+    assertTrue(provOk.any { it.source == "Heart Rate" && it.origin == com.example.core.WffDataSourceOrigin.REAL_SENSOR && it.detail == "Available" })
+
+    org.robolectric.Shadows.shadowOf(app).denyPermissions(hrPerm)
+    sensorSource.refreshDiagnostics()
+    val provDenied = com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(hrFace, sensorSource.diagnostics.value, emptyMap())
+    assertTrue(provDenied.any { it.source == "Heart Rate" && it.origin == com.example.core.WffDataSourceOrigin.NO_DATA && it.detail == "Permission needed" })
+  }
+
   private fun buildMinimalTestArsc(
     globalStrings: List<String>,
     typeName: String,

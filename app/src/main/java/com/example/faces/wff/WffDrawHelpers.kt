@@ -168,6 +168,54 @@ internal object WffDrawHelpers {
     return out
   }
 
+  /**
+   * Computes rendered pixel bounds `(widthPx, heightPx)` for each `<Photos>` config referenced in [face],
+   * capped proportionally at [maxSidePx] (default 1080px) on the longest side.
+   */
+  fun computePhotoSlotTargetSizes(
+    face: WffWatchFace,
+    stageScale: Float,
+    maxSidePx: Int = WffPhotoManager.MAX_PHOTO_SIDE_PX,
+  ): Map<String, Pair<Int, Int>> {
+    val slotMax = HashMap<String, Pair<Int, Int>>()
+    fun record(configId: String, w: Float, h: Float) {
+      val (tw, th) = WffPhotoManager.clampDimsLongestSide(
+        (w * stageScale).roundToInt(),
+        (h * stageScale).roundToInt(),
+        maxSidePx,
+      )
+      val prev = slotMax[configId]
+      slotMax[configId] = if (prev == null) {
+        tw to th
+      } else {
+        WffPhotoManager.clampDimsLongestSide(maxOf(prev.first, tw), maxOf(prev.second, th), maxSidePx)
+      }
+    }
+
+    fun scan(node: WffSceneNode) {
+      when (node) {
+        is WffSceneNode.Group -> node.children.forEach(::scan)
+        is WffSceneNode.Condition -> {
+          node.branches.forEach { it.children.forEach(::scan) }
+          node.defaultChildren.forEach(::scan)
+        }
+        is WffSceneNode.ComplicationSlot -> {
+          node.templates.forEach { it.children.forEach(::scan) }
+        }
+        is WffSceneNode.PartImage -> {
+          val photos = node.photos
+          if (photos != null) {
+            val key = photos.configId.orEmpty()
+            record(key, node.width, node.height)
+          }
+        }
+        else -> Unit
+      }
+    }
+    face.nodes.forEach(::scan)
+    return slotMax
+  }
+
   /** Decodes [file] at drawn bounds without exceeding source or target dimensions. */
   fun decodeBitmapFileForSize(file: File, maxTargetW: Int, maxTargetH: Int): Bitmap? {
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -192,7 +240,11 @@ internal object WffDrawHelpers {
       val scaledW = (decoded.width * scale).roundToInt().coerceAtLeast(1)
       val scaledH = (decoded.height * scale).roundToInt().coerceAtLeast(1)
       if (scaledW < decoded.width || scaledH < decoded.height) {
-        return Bitmap.createScaledBitmap(decoded, scaledW, scaledH, true)
+        val scaled = Bitmap.createScaledBitmap(decoded, scaledW, scaledH, true)
+        if (scaled !== decoded) {
+          decoded.recycle()
+        }
+        return scaled
       }
     }
     return decoded

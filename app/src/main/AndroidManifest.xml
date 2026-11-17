@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission
+        android:name="android.permission.BODY_SENSORS"
+        android:maxSdkVersion="35" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
 
     <application
         android:name=".AuraClockApp"

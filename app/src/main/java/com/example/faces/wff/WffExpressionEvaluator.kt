@@ -799,7 +799,7 @@ internal object WffExpressionEvaluator {
       out += com.example.core.WffDataSourceInfo(
         source = "Steps (STEP_COUNT)",
         origin = origin,
-        detail = avail?.label ?: "Sensor status pending",
+        detail = "${avail?.label ?: "Sensor status pending"} · steps since first seen today",
       )
     }
     if (sources.any { it.startsWith("HEART_RATE") }) {
@@ -812,7 +812,7 @@ internal object WffExpressionEvaluator {
       out += com.example.core.WffDataSourceInfo(
         source = "Heart Rate",
         origin = origin,
-        detail = if (origin == com.example.core.WffDataSourceOrigin.REAL_SENSOR) "Available" else "No heart rate sensor",
+        detail = avail?.label ?: "No hardware",
       )
     }
     if (sources.any { it == "LIGHT_LEVEL" || it == "ILLUMINANCE" }) {
