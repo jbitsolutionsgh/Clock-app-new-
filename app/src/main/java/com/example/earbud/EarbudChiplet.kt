@@ -64,6 +64,10 @@ object EarbudChiplet {
 
   private val _diagnostics = MutableStateFlow(EarbudDiagnostics())
   private var routerInstance: MediaKeyRouter? = null
+  private val learnController = EarbudLearnController()
+
+  /** Observable 6-second "Learn a press" recording/result state for Settings UI. */
+  internal val learnModeState: StateFlow<LearnModeState> = learnController.state
 
   /** Initializes and registers the EarbudController in CoreSingletons. */
   fun ensureInitialized(context: Context): EarbudController {
@@ -108,9 +112,48 @@ object EarbudChiplet {
             lastActionExecuted = actionLabel,
           )
         },
+        onPatternDiagnostics = { patternLabel, keyLabel, timeLabel, actionLabel ->
+          _diagnostics.value = _diagnostics.value.copy(
+            lastKeyCodeLabel = keyLabel,
+            lastKeyTimeLabel = timeLabel,
+            lastDetectedPattern = patternLabel,
+            lastActionExecuted = actionLabel,
+          )
+        },
+        onForwardResult = { success ->
+          _diagnostics.value = if (success) {
+            _diagnostics.value.copy(forwardedKeyCount = _diagnostics.value.forwardedKeyCount + 1)
+          } else {
+            _diagnostics.value.copy(forwardFailureCount = _diagnostics.value.forwardFailureCount + 1)
+          }
+        },
       ).also { routerInstance = it }
     }
   }
+
+  /** Starts the 6-second hardware press recorder in Settings. */
+  internal fun startLearnMode(context: Context) {
+    learnController.start(context.applicationContext, router(context))
+  }
+
+  /** Finishes Learn Mode early with presses captured so far. */
+  internal fun finishLearnModeNow() {
+    learnController.finishNow()
+  }
+
+  /** Cancels any active Learn Mode recording or result dialog. */
+  internal fun cancelLearnMode() {
+    learnController.cancel()
+  }
+
+  /** Persists a learned press pattern mapped to [actionId]. */
+  internal fun saveLearnedPattern(context: Context, candidate: LearnedPressCandidate, actionId: String) {
+    learnController.confirmAndSave(context, candidate, actionId)
+  }
+
+  /** Formats a learned pattern concisely for Settings and Diagnostics display. */
+  fun formatPatternLabel(pattern: com.example.core.LearnedPressPattern): String =
+    PressPatternDetector.formatPatternLabel(pattern)
 
   internal fun updateServiceRunning(running: Boolean) {
     _diagnostics.value = _diagnostics.value.copy(serviceRunning = running)
@@ -153,6 +196,32 @@ object EarbudChiplet {
       val intent = Intent(context, EarbudListenerService::class.java)
       ContextCompat.startForegroundService(context, intent)
     }
+  }
+
+  /** Renders the collapsible Earbuds and voice settings section owned by earbud chiplet. */
+  @Composable
+  fun SettingsSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+  ) {
+    EarbudSettingsSection(expanded = expanded, onToggle = onToggle, modifier = modifier)
+  }
+
+  /** Renders the collapsible Diagnostics and about summary section owned by earbud chiplet. */
+  @Composable
+  fun DiagnosticsAboutSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    modifier: Modifier = Modifier,
+  ) {
+    DiagnosticsAboutSettingsSection(
+      expanded = expanded,
+      onToggle = onToggle,
+      onOpenDiagnostics = onOpenDiagnostics,
+      modifier = modifier,
+    )
   }
 
   /** Renders the Diagnostics screen showing service state, TTS readiness, last key, and crash log share. */
@@ -243,6 +312,12 @@ object EarbudChiplet {
             modifier = Modifier.testTag("diag_last_key_code"),
           )
           Text(
+            text = "Pattern: ${diag.lastDetectedPattern}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_last_pattern"),
+          )
+          Text(
             text = "Time: ${diag.lastKeyTimeLabel}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
@@ -252,6 +327,7 @@ object EarbudChiplet {
             text = "Action: ${diag.lastActionExecuted}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_last_action"),
           )
         }
       }
@@ -279,6 +355,18 @@ object EarbudChiplet {
             modifier = Modifier.testTag("diag_other_app_playing"),
           )
           Text(
+            text = "Forwarded to music app: ${diag.forwardedKeyCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_forwarded_count"),
+          )
+          Text(
+            text = "Forward failures: ${diag.forwardFailureCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (diag.forwardFailureCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_forward_failures"),
+          )
+          Text(
             text = "Re-primes: ${diag.reprimeCount}",
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White,
@@ -290,6 +378,48 @@ object EarbudChiplet {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("diag_last_reprime_time"),
           )
+        }
+      }
+
+      val learnedPatterns by prefs.learnedPatterns.collectAsStateWithLifecycle()
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+          .testTag("diag_learned_patterns_card"),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Learned Earbud Patterns",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          if (learnedPatterns.isEmpty()) {
+            Text(
+              text = "None learned yet.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("diag_learned_patterns_list"),
+            )
+          } else {
+            Column(
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+              modifier = Modifier.testTag("diag_learned_patterns_list"),
+            ) {
+              learnedPatterns.forEach { pattern ->
+                Text(
+                  text = "• ${formatPatternLabel(pattern)} → ${actionLabel(pattern.actionId)}",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color.White,
+                )
+              }
+            }
+          }
         }
       }
 

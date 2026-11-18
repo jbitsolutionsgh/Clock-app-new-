@@ -109,6 +109,16 @@ object TimerChiplet {
     engine.playTestBeep()
   }
 
+  /** Renders the collapsible Timer and rounds settings section owned by timer chiplet. */
+  @Composable
+  fun SettingsSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+  ) {
+    TimerSettingsSection(expanded = expanded, onToggle = onToggle, modifier = modifier)
+  }
+
   /** Renders the classroom countdown timer UI, supporting both normal and immersive full-screen modes. */
   @Composable
   fun Screen(

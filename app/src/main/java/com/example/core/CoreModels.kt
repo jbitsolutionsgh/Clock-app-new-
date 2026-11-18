@@ -77,16 +77,27 @@ interface FaceNavigator {
   fun getFaceOptions(): List<Pair<String, String>>
 }
 
+/** Persisted earbud press pattern (e.g. 3x Play/Pause or 1x Previous track) mapped to an action. */
+data class LearnedPressPattern(
+  val keyCode: Int,
+  val count: Int,
+  val actionId: String,
+  val keyLabel: String,
+)
+
 data class EarbudDiagnostics(
   val serviceRunning: Boolean = false,
   val ttsReady: Boolean = false,
   val ttsStatus: String = "Initializing...",
   val lastKeyCodeLabel: String = "None",
   val lastKeyTimeLabel: String = "Never",
+  val lastDetectedPattern: String = "None",
   val lastActionExecuted: String = "None",
   val otherAppPlaying: Boolean = false,
   val reprimeCount: Int = 0,
   val lastReprimeTimeLabel: String = "Never",
+  val forwardedKeyCount: Int = 0,
+  val forwardFailureCount: Int = 0,
 )
 
 /** Public entry interface for starting, stopping, and observing the earbud listener service. */

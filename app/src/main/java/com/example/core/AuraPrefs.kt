@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Single shared SharedPreferences store for all AuraClock settings.
@@ -57,11 +59,26 @@ class AuraPrefs(context: Context) {
   private val _earbudTakeOverDuringAudio = MutableStateFlow(safeBoolean(KEY_EARBUD_TAKE_OVER_AUDIO, true))
   val earbudTakeOverDuringAudio: StateFlow<Boolean> = _earbudTakeOverDuringAudio.asStateFlow()
 
-  private val _playPauseActionId = MutableStateFlow(safeString(KEY_ACTION_PLAY_PAUSE, ACTION_SPEAK_TIME) ?: ACTION_SPEAK_TIME)
+  private val _playPauseActionId = MutableStateFlow(
+    safeString(KEY_ACTION_PLAY_PAUSE, ACTION_FORWARD_TO_MUSIC) ?: ACTION_FORWARD_TO_MUSIC,
+  )
   val playPauseActionId: StateFlow<String> = _playPauseActionId.asStateFlow()
 
-  private val _playPauseDoubleActionId = MutableStateFlow(safeString(KEY_ACTION_PLAY_PAUSE_DOUBLE, ACTION_NONE) ?: ACTION_NONE)
+  private val _playPauseDoubleActionId = MutableStateFlow(
+    safeString(KEY_ACTION_PLAY_PAUSE_DOUBLE, ACTION_NONE) ?: ACTION_NONE,
+  )
   val playPauseDoubleActionId: StateFlow<String> = _playPauseDoubleActionId.asStateFlow()
+
+  private val _playPauseTripleActionId = MutableStateFlow(
+    safeString(KEY_ACTION_PLAY_PAUSE_TRIPLE, ACTION_SPEAK_TIME) ?: ACTION_SPEAK_TIME,
+  )
+  val playPauseTripleActionId: StateFlow<String> = _playPauseTripleActionId.asStateFlow()
+
+  private val _earbudPressWindowMs = MutableStateFlow(safeInt(KEY_EARBUD_PRESS_WINDOW_MS, 400).coerceIn(300, 600))
+  val earbudPressWindowMs: StateFlow<Int> = _earbudPressWindowMs.asStateFlow()
+
+  private val _learnedPatterns = MutableStateFlow(loadLearnedPatterns())
+  val learnedPatterns: StateFlow<List<LearnedPressPattern>> = _learnedPatterns.asStateFlow()
 
   private val _nextActionId = MutableStateFlow(safeString(KEY_ACTION_NEXT, ACTION_TIMER_TOGGLE) ?: ACTION_TIMER_TOGGLE)
   val nextActionId: StateFlow<String> = _nextActionId.asStateFlow()
@@ -226,19 +243,81 @@ class AuraPrefs(context: Context) {
     _playPauseActionId.value = actionId
   }
 
-  /** Assigns an action ID to double Play/Pause earbud presses ("none" disables delay). */
+  /** Assigns an action ID to double Play/Pause earbud presses. */
   fun setPlayPauseDoubleActionId(actionId: String) {
     prefs.edit().putString(KEY_ACTION_PLAY_PAUSE_DOUBLE, actionId).apply()
     _playPauseDoubleActionId.value = actionId
   }
 
-  /** Assigns an action ID to the Next (held volume up) earbud key. */
+  /** Assigns an action ID to triple Play/Pause earbud presses. */
+  fun setPlayPauseTripleActionId(actionId: String) {
+    prefs.edit().putString(KEY_ACTION_PLAY_PAUSE_TRIPLE, actionId).apply()
+    _playPauseTripleActionId.value = actionId
+  }
+
+  /** Sets the multi-press detection window in milliseconds (300 to 600 ms, default 400 ms). */
+  fun setEarbudPressWindowMs(windowMs: Int) {
+    val clamped = windowMs.coerceIn(300, 600)
+    prefs.edit().putInt(KEY_EARBUD_PRESS_WINDOW_MS, clamped).apply()
+    _earbudPressWindowMs.value = clamped
+  }
+
+  /** Saves or updates a learned earbud press pattern keyed by (keyCode, count). */
+  fun saveLearnedPattern(pattern: LearnedPressPattern) {
+    val updated = _learnedPatterns.value
+      .filterNot { it.keyCode == pattern.keyCode && it.count == pattern.count } + pattern
+    persistLearnedPatterns(updated)
+  }
+
+  /** Removes a previously learned earbud press pattern matching (keyCode, count). */
+  fun removeLearnedPattern(keyCode: Int, count: Int) {
+    val updated = _learnedPatterns.value
+      .filterNot { it.keyCode == keyCode && it.count == count }
+    persistLearnedPatterns(updated)
+  }
+
+  private fun persistLearnedPatterns(patterns: List<LearnedPressPattern>) {
+    val arr = JSONArray()
+    patterns.forEach { p ->
+      arr.put(
+        JSONObject().apply {
+          put("keyCode", p.keyCode)
+          put("count", p.count.coerceIn(1, 4))
+          put("actionId", p.actionId)
+          put("keyLabel", p.keyLabel)
+        },
+      )
+    }
+    prefs.edit().putString(KEY_LEARNED_PATTERNS, arr.toString()).apply()
+    _learnedPatterns.value = patterns
+  }
+
+  private fun loadLearnedPatterns(): List<LearnedPressPattern> {
+    val raw = safeString(KEY_LEARNED_PATTERNS, null) ?: return emptyList()
+    return runCatching {
+      val arr = JSONArray(raw)
+      buildList {
+        for (i in 0 until arr.length()) {
+          val obj = arr.optJSONObject(i) ?: continue
+          val keyCode = obj.optInt("keyCode", 0)
+          val count = obj.optInt("count", 1).coerceIn(1, 4)
+          val actionId = obj.optString("actionId", ACTION_NONE)
+          val keyLabel = obj.optString("keyLabel", "Media Key")
+          if (keyCode != 0) {
+            add(LearnedPressPattern(keyCode = keyCode, count = count, actionId = actionId, keyLabel = keyLabel))
+          }
+        }
+      }
+    }.getOrDefault(emptyList())
+  }
+
+  /** Assigns an action ID to the MEDIA_NEXT earbud key. */
   fun setNextActionId(actionId: String) {
     prefs.edit().putString(KEY_ACTION_NEXT, actionId).apply()
     _nextActionId.value = actionId
   }
 
-  /** Assigns an action ID to the Previous (held volume down) earbud key. */
+  /** Assigns an action ID to the MEDIA_PREVIOUS earbud key. */
   fun setPreviousActionId(actionId: String) {
     prefs.edit().putString(KEY_ACTION_PREVIOUS, actionId).apply()
     _previousActionId.value = actionId
@@ -503,8 +582,11 @@ class AuraPrefs(context: Context) {
     _selectedFaceId.value = "motorsport_m"
     _earbudEnabled.value = true
     _earbudTakeOverDuringAudio.value = true
-    _playPauseActionId.value = ACTION_SPEAK_TIME
+    _playPauseActionId.value = ACTION_FORWARD_TO_MUSIC
     _playPauseDoubleActionId.value = ACTION_NONE
+    _playPauseTripleActionId.value = ACTION_SPEAK_TIME
+    _earbudPressWindowMs.value = 400
+    _learnedPatterns.value = emptyList()
     _nextActionId.value = ACTION_TIMER_TOGGLE
     _previousActionId.value = ACTION_NEXT_FACE
     _standByUseSelectedFace.value = false
@@ -529,6 +611,7 @@ class AuraPrefs(context: Context) {
     private val DEFAULT_PRESETS = listOf(5, 10, 20, 30, 60)
 
     const val ACTION_NONE = "none"
+    const val ACTION_FORWARD_TO_MUSIC = "forward_to_music"
     const val ACTION_SPEAK_TIME = "speak_time"
     const val ACTION_TIMER_TOGGLE = "timer_toggle"
     const val ACTION_STOPWATCH_TOGGLE = "stopwatch_toggle"
@@ -550,6 +633,9 @@ class AuraPrefs(context: Context) {
     private const val KEY_EARBUD_TAKE_OVER_AUDIO = "earbud_take_over_audio"
     private const val KEY_ACTION_PLAY_PAUSE = "action_play_pause"
     private const val KEY_ACTION_PLAY_PAUSE_DOUBLE = "action_play_pause_double"
+    private const val KEY_ACTION_PLAY_PAUSE_TRIPLE = "action_play_pause_triple"
+    private const val KEY_EARBUD_PRESS_WINDOW_MS = "earbud_press_window_ms"
+    private const val KEY_LEARNED_PATTERNS = "earbud_learned_patterns"
     private const val KEY_ACTION_NEXT = "action_next"
     private const val KEY_ACTION_PREVIOUS = "action_previous"
     private const val KEY_STANDBY_USE_SELECTED = "standby_use_selected"

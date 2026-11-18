@@ -101,6 +101,7 @@ class ExampleRobolectricTest {
     val prefs = AuraPrefs(context)
     prefs.setPlayPauseActionId(AuraPrefs.ACTION_SPEAK_TIME)
     prefs.setPlayPauseDoubleActionId(AuraPrefs.ACTION_NONE)
+    prefs.setPlayPauseTripleActionId(AuraPrefs.ACTION_NONE)
 
     var recordedKey = ""
     var recordedAction = ""
@@ -1274,6 +1275,7 @@ class ExampleRobolectricTest {
     // Verify all media keys (play/pause/hook single, double, next/previous) reach MediaKeyRouter
     prefs.setPlayPauseActionId(AuraPrefs.ACTION_SPEAK_TIME)
     prefs.setPlayPauseDoubleActionId(AuraPrefs.ACTION_TIMER_TOGGLE)
+    prefs.setPlayPauseTripleActionId(AuraPrefs.ACTION_NONE)
     prefs.setNextActionId(AuraPrefs.ACTION_TIMER_TOGGLE)
     prefs.setPreviousActionId(AuraPrefs.ACTION_NEXT_FACE)
     val seenKeys = mutableListOf<String>()

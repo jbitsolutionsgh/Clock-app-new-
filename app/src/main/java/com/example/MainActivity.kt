@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,6 +158,7 @@ private fun AuraClockRoot() {
   var showStandByPreview by rememberSaveable { mutableStateOf(false) }
   var isTimerFullScreen by rememberSaveable { mutableStateOf(prefs.timerFullScreenByDefault.value) }
   var openDiagnosticsRequest by rememberSaveable { mutableStateOf(false) }
+  val settingsStateHolder = rememberSaveableStateHolder()
 
   val configuration = LocalConfiguration.current
   val useRail = configuration.screenWidthDp > configuration.screenHeightDp && configuration.screenWidthDp >= 600
@@ -284,11 +286,13 @@ private fun AuraClockRoot() {
           )
           AppTab.CLOCK -> FacesChiplet.Screen()
           AppTab.STOPWATCH -> StopwatchChiplet.Screen()
-          AppTab.SETTINGS -> SettingsScreen(
-            onPreviewStandBy = { showStandByPreview = true },
-            openDiagnosticsRequest = openDiagnosticsRequest,
-            onDiagnosticsRequestHandled = { openDiagnosticsRequest = false },
-          )
+          AppTab.SETTINGS -> settingsStateHolder.SaveableStateProvider("tab_settings_state") {
+            SettingsScreen(
+              onPreviewStandBy = { showStandByPreview = true },
+              openDiagnosticsRequest = openDiagnosticsRequest,
+              onDiagnosticsRequestHandled = { openDiagnosticsRequest = false },
+            )
+          }
         }
       }
     }

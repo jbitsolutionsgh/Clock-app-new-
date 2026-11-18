@@ -18,12 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Watch
@@ -32,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,17 +51,23 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
+import com.example.core.ui.CollapsibleSection
 import com.example.faces.wff.WffConfigSheet
 import com.example.faces.wff.WffImportResult
 import com.example.faces.wff.WffStoredFace
 
 /**
- * Watch face picker and Wear OS Watch Face Format (WFF) import/management card shown inside Settings.
+ * Watch face picker, WFF import/management, and colour theme section owned by faces chiplet.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
+internal fun FacesSettingsSection(
+  expanded: Boolean,
+  onToggle: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
   val context = LocalContext.current
   val prefs = remember { CoreSingletons.prefs(context) }
   LaunchedEffect(context) {
@@ -70,6 +77,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
   val allFaces by WatchFaceRegistry.facesFlow.collectAsStateWithLifecycle()
   val importedWffFaces by WatchFaceRegistry.wffFacesFlow.collectAsStateWithLifecycle()
   val selectedFaceId by prefs.selectedFaceId.collectAsStateWithLifecycle()
+  val themeColor by prefs.themeColor.collectAsStateWithLifecycle()
 
   var statusMessage by remember { mutableStateOf<String?>(null) }
   var statusIsError by remember { mutableStateOf(false) }
@@ -100,22 +108,24 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
     }
   }
 
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    shape = RoundedCornerShape(18.dp),
-    modifier = modifier
-      .fillMaxWidth()
-      .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
+  val activeFaceName = remember(allFaces, selectedFaceId) {
+    allFaces.firstOrNull { it.id == selectedFaceId }?.displayName ?: "Motorsport M"
+  }
+  val closedSummary = if (importedWffFaces.isEmpty()) {
+    "$activeFaceName • ${themeColor.label}"
+  } else {
+    "$activeFaceName • ${importedWffFaces.size} imported • ${themeColor.label}"
+  }
+
+  CollapsibleSection(
+    title = "Watch faces",
+    summary = closedSummary,
+    icon = Icons.Default.Watch,
+    expanded = expanded,
+    onToggle = onToggle,
+    headerTestTag = "settings_section_faces",
+    modifier = modifier,
   ) {
-    Column(
-      modifier = Modifier.padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.Watch, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.width(10.dp))
-        Text("Watch Faces", style = MaterialTheme.typography.titleLarge, color = Color.White)
-      }
 
       FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -152,7 +162,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
             Text(
               text = face.displayName,
               style = MaterialTheme.typography.bodyMedium,
-              color = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+              color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
           }
         }
@@ -211,7 +221,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
                 text = entry.displayName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
               )
               val score = entry.report.scorePercent
               val partlyCount = entry.report.partlyDrawnCount
@@ -255,7 +265,68 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
           }
         }
       }
-    }
+
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+          imageVector = Icons.Default.Palette,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+          text = "Colour Theme",
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        AuraThemeColor.entries.forEach { option ->
+          val selected = option == themeColor
+          Row(
+            modifier = Modifier
+              .clip(RoundedCornerShape(14.dp))
+              .background(
+                if (selected) option.container else MaterialTheme.colorScheme.surfaceVariant,
+              )
+              .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (selected) option.primary else MaterialTheme.colorScheme.outline,
+                shape = RoundedCornerShape(14.dp),
+              )
+              .clickable { prefs.setThemeColor(option) }
+              .padding(horizontal = 12.dp, vertical = 10.dp)
+              .testTag("theme_chip_${option.id}"),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Box(
+              modifier = Modifier
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(option.primary),
+              contentAlignment = Alignment.Center,
+            ) {
+              if (selected) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onPrimary,
+                  modifier = Modifier.size(12.dp),
+                )
+              }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = option.label,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+        }
+      }
   }
 
   detailsFace?.let { entry ->
@@ -275,7 +346,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
           Text(
             text = "Canvas: ${entry.face.width.toInt()}x${entry.face.height.toInt()} (${entry.face.clipShape})",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
             text = "Compatibility score: ${entry.report.scorePercent}%",
@@ -290,7 +361,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
               color = MaterialTheme.colorScheme.primary,
             )
             entry.face.metadata.forEach { (k, v) ->
-              Text("$k: $v", style = MaterialTheme.typography.bodySmall, color = Color.White)
+              Text("$k: $v", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
             }
           }
           val sensorDiag = remember(entry.id) { CoreSingletons.sensorSource(context).diagnostics.value }
@@ -332,7 +403,7 @@ internal fun FacesSettingsSection(modifier: Modifier = Modifier) {
           Text(
             text = entry.report.drawnElements.joinToString(", ").ifEmpty { "None" },
             style = MaterialTheme.typography.bodySmall,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
           )
           if (entry.report.partlyDrawnItems.isNotEmpty()) {
             Text(

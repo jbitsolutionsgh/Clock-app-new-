@@ -35,7 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.CoreSingletons
 import com.example.core.StandByCalendarWindow
 import com.example.core.StandByDiagnosticsProvider
+import com.example.core.ui.CollapsibleSection
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
 import kotlin.math.roundToInt
@@ -98,6 +98,8 @@ object StandByChiplet {
   @OptIn(ExperimentalLayoutApi::class)
   @Composable
   fun SettingsSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onOpenPreview: () -> Unit,
     modifier: Modifier = Modifier,
   ) {
@@ -105,84 +107,87 @@ object StandByChiplet {
     val prefs = remember { CoreSingletons.prefs(context) }
     val coordinator = remember { coordinator(context) }
 
-    val standByUseSelected by prefs.standByUseSelectedFace.collectAsStateWithLifecycle()
     val standByDim by prefs.standByDimLevel.collectAsStateWithLifecycle()
     val calendarEnabled by prefs.standByCalendarEnabled.collectAsStateWithLifecycle()
-    val selectedIds by prefs.selectedCalendarIds.collectAsStateWithLifecycle()
-    val maxEvents by prefs.standByMaxEvents.collectAsStateWithLifecycle()
-    val calendarWindow by prefs.standByCalendarWindow.collectAsStateWithLifecycle()
-    val showTitles by prefs.standByShowEventTitles.collectAsStateWithLifecycle()
     val calSnapshot by coordinator.snapshot.collectAsStateWithLifecycle()
 
-    LaunchedEffect(Unit) {
-      coordinator.refreshSuspend()
-    }
-
-    val calendarPermissionLauncher = rememberLauncherForActivityResult(
-      contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-      if (granted) {
-        prefs.setStandByCalendarEnabled(true)
+    val summary = "${(standByDim * 100).roundToInt()}% brightness • " +
+      when {
+        !calSnapshot.permissionGranted -> "Calendar permission needed"
+        calendarEnabled -> "Calendar on"
+        else -> "Calendar off"
       }
-      coordinator.refreshNow()
-    }
 
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      shape = RoundedCornerShape(18.dp),
-      modifier = modifier
-        .fillMaxWidth()
-        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
+    CollapsibleSection(
+      title = "Screensaver and Stand By",
+      summary = summary,
+      icon = Icons.Default.Bedtime,
+      expanded = expanded,
+      onToggle = onToggle,
+      headerTestTag = "settings_section_standby",
+      modifier = modifier,
     ) {
-      Column(
-        modifier = Modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Icon(Icons.Default.Bedtime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-          Spacer(modifier = Modifier.width(10.dp))
-          Text("Stand By Screensaver", style = MaterialTheme.typography.titleLarge, color = Color.White)
-        }
+      val standByUseSelected by prefs.standByUseSelectedFace.collectAsStateWithLifecycle()
+      val selectedIds by prefs.selectedCalendarIds.collectAsStateWithLifecycle()
+      val maxEvents by prefs.standByMaxEvents.collectAsStateWithLifecycle()
+      val calendarWindow by prefs.standByCalendarWindow.collectAsStateWithLifecycle()
+      val showTitles by prefs.standByShowEventTitles.collectAsStateWithLifecycle()
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text("Mirror active watch face", style = MaterialTheme.typography.titleMedium)
-            Text(
-              text = if (standByUseSelected) "Uses active Clock face" else "Uses Big Stand By Digital",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-          Switch(
-            checked = standByUseSelected,
-            onCheckedChange = { prefs.setStandByUseSelectedFace(it) },
-            modifier = Modifier.testTag("settings_standby_mirror_switch"),
+      LaunchedEffect(Unit) {
+        coordinator.refreshSuspend()
+      }
+
+      val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+      ) { granted ->
+        if (granted) {
+          prefs.setStandByCalendarEnabled(true)
+        }
+        coordinator.refreshNow()
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Mirror active watch face",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = if (standByUseSelected) "Uses active Clock face" else "Uses Big Stand By Digital",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
-
-        Text(
-          text = "Night brightness: ${(standByDim * 100).roundToInt()}%",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Switch(
+          checked = standByUseSelected,
+          onCheckedChange = { prefs.setStandByUseSelectedFace(it) },
+          modifier = Modifier.testTag("settings_standby_mirror_switch"),
         )
-        Slider(
-          value = standByDim,
-          onValueChange = { prefs.setStandByDimLevel(it) },
-          valueRange = 0.15f..1.0f,
-          modifier = Modifier.testTag("settings_standby_dim_slider"),
-        )
+      }
 
-        // Calendar integration section
-        Spacer(modifier = Modifier.height(2.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-          Spacer(modifier = Modifier.width(8.dp))
-          Text("Stand By Calendar", style = MaterialTheme.typography.titleMedium, color = Color.White)
-        }
+      Text(
+        text = "Night brightness: ${(standByDim * 100).roundToInt()}%",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Slider(
+        value = standByDim,
+        onValueChange = { prefs.setStandByDimLevel(it) },
+        valueRange = 0.15f..1.0f,
+        modifier = Modifier.testTag("settings_standby_dim_slider"),
+      )
+
+      Spacer(modifier = Modifier.height(2.dp))
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Stand By Calendar", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+      }
 
         Text(
           text = "AuraClock reads your calendar to show upcoming events on the charging screen. Nothing leaves your phone.",
@@ -270,7 +275,7 @@ object StandByChiplet {
                     text = "$count",
                     fontFamily = JetBrainsMonoFamily,
                     fontWeight = FontWeight.Bold,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary else Color.White,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                   )
                 }
               }
@@ -309,7 +314,7 @@ object StandByChiplet {
                   Text(
                     text = win.label,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   )
                 }
               }
@@ -357,7 +362,7 @@ object StandByChiplet {
                       Text(
                         text = cal.displayName,
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                       )
@@ -410,7 +415,6 @@ object StandByChiplet {
             Text("Screensaver")
           }
         }
-      }
     }
   }
 

@@ -43,8 +43,11 @@ class EarbudListenerService : Service() {
   private val mainHandler = Handler(Looper.getMainLooper())
   private var playbackCallback: AudioManager.AudioPlaybackCallback? = null
   private var pendingReprimeRunnable: Runnable? = null
+  private var reactivateSessionRunnable: Runnable? = null
   private var lastOwnPrimeElapsedMs: Long = -1L
   private var lastReprimeElapsedMs: Long = -1L
+  @Volatile
+  private var isForwardingSessionInactive: Boolean = false
   private var isDestroyed: Boolean = false
 
   override fun onCreate() {
@@ -102,8 +105,12 @@ class EarbudListenerService : Service() {
 
   override fun onDestroy() {
     isDestroyed = true
+    isForwardingSessionInactive = false
     cancelPendingReprime()
+    reactivateSessionRunnable?.let { mainHandler.removeCallbacks(it) }
+    reactivateSessionRunnable = null
     unregisterPlaybackCallback()
+    EarbudChiplet.router(this).setSessionForwarder(null)
     EarbudChiplet.updateServiceRunning(false)
     runCatching {
       mediaSession?.isActive = false
@@ -145,6 +152,9 @@ class EarbudListenerService : Service() {
       )
       setCallback(object : MediaSession.Callback() {
         override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+          if (isForwardingSessionInactive) {
+            return super.onMediaButtonEvent(mediaButtonIntent)
+          }
           val event = IntentCompat.getParcelableExtra(
             mediaButtonIntent,
             Intent.EXTRA_KEY_EVENT,
@@ -154,25 +164,53 @@ class EarbudListenerService : Service() {
         }
 
         override fun onPlay() {
-          router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PLAY, allowDedup = true)
+          if (!isForwardingSessionInactive) router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PLAY, allowDedup = true)
         }
 
         override fun onPause() {
-          router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PAUSE, allowDedup = true)
+          if (!isForwardingSessionInactive) router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PAUSE, allowDedup = true)
         }
 
         override fun onSkipToNext() {
-          router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_NEXT, allowDedup = true)
+          if (!isForwardingSessionInactive) router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_NEXT, allowDedup = true)
         }
 
         override fun onSkipToPrevious() {
-          router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PREVIOUS, allowDedup = true)
+          if (!isForwardingSessionInactive) router.routeKeyCode(KeyEvent.KEYCODE_MEDIA_PREVIOUS, allowDedup = true)
         }
       })
       isActive = true
     }
     mediaSession = session
+    router.setSessionForwarder { keyCode -> forwardMediaKeyFromSession(keyCode) }
     primeMediaButtonRouting(isReprime = false)
+  }
+
+  /**
+   * Deactivates AuraClock's MediaSession temporarily, dispatches DOWN+UP via AudioManager to the
+   * underlying music app, and re-activates the session ~300 ms later without requiring extra permissions.
+   */
+  private fun forwardMediaKeyFromSession(keyCode: Int): Boolean {
+    val session = mediaSession
+    if (session == null) {
+      return MediaKeyRouter.defaultDispatchMediaKey(this, keyCode)
+    }
+    reactivateSessionRunnable?.let { mainHandler.removeCallbacks(it) }
+    isForwardingSessionInactive = true
+    runCatching { session.isActive = false }
+
+    val dispatched = MediaKeyRouter.defaultDispatchMediaKey(this, keyCode)
+
+    val reactivate = Runnable {
+      reactivateSessionRunnable = null
+      isForwardingSessionInactive = false
+      if (!isDestroyed) {
+        runCatching { mediaSession?.isActive = true }
+      }
+    }
+    reactivateSessionRunnable = reactivate
+    mainHandler.postDelayed(reactivate, SESSION_REACTIVATE_DELAY_MS)
+    return dispatched
   }
 
   /** Checks active audio before initial priming so Diagnostics starts with an accurate reading. */
@@ -379,5 +417,6 @@ class EarbudListenerService : Service() {
     const val ACTION_RECHECK_PLAYBACK = "com.example.earbud.RECHECK_PLAYBACK"
     private const val CHANNEL_ID = "auraclock_earbud_channel"
     private const val NOTIFICATION_ID = 1002
+    private const val SESSION_REACTIVATE_DELAY_MS = 300L
   }
 }

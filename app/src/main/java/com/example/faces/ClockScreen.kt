@@ -202,10 +202,18 @@ object FacesChiplet {
     }
   }
 
-  /** Renders the Watch Faces picker and WFF import/management card inside Settings. */
+  /** Renders the collapsible Watch faces picker, theme colour, and WFF section inside Settings. */
   @Composable
-  fun SettingsSection(modifier: Modifier = Modifier) {
-    FacesSettingsSection(modifier = modifier)
+  fun SettingsSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+  ) {
+    FacesSettingsSection(
+      expanded = expanded,
+      onToggle = onToggle,
+      modifier = modifier,
+    )
   }
 
   /** Renders a watch face for the Stand By screensaver in ambient mode. */

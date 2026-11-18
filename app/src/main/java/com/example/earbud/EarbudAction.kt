@@ -14,9 +14,15 @@ internal interface EarbudAction {
   fun execute(context: Context)
 }
 
+internal class ForwardToMusicAction : EarbudAction {
+  override val id: String = AuraPrefs.ACTION_FORWARD_TO_MUSIC
+  override val label: String = "Let the music app handle it"
+  override fun execute(context: Context) = Unit
+}
+
 internal class NoOpAction : EarbudAction {
   override val id: String = AuraPrefs.ACTION_NONE
-  override val label: String = "Disabled (None)"
+  override val label: String = "No action"
   override fun execute(context: Context) = Unit
 }
 
@@ -59,6 +65,7 @@ internal object EarbudActionRegistry {
     ToggleTimerAction(),
     ToggleStopwatchAction(),
     NextWatchFaceAction(),
+    ForwardToMusicAction(),
     NoOpAction(),
   )
 
