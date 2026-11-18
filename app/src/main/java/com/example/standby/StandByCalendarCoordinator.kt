@@ -51,11 +51,30 @@ internal class StandByCalendarCoordinator(
   private val _snapshot = MutableStateFlow(StandByCalendarSnapshot())
   val snapshot: StateFlow<StandByCalendarSnapshot> = _snapshot.asStateFlow()
 
-  private val _diagnostics = MutableStateFlow(StandByDiagnostics())
+  private val _diagnostics = MutableStateFlow(
+    StandByDimming.compute(prefs.standByDimLevel.value).let { dim ->
+      StandByDiagnostics(
+        requestedWindowBrightness = dim.windowBrightness,
+        softwareDimLevel = dim.softwareDimAlpha,
+      )
+    },
+  )
   override val diagnostics: StateFlow<StandByDiagnostics> = _diagnostics.asStateFlow()
 
   private val _nextEvent = MutableStateFlow<NextCalendarEvent?>(null)
   override val nextEvent: StateFlow<NextCalendarEvent?> = _nextEvent.asStateFlow()
+
+  init {
+    scope.launch {
+      prefs.standByDimLevel.collect { level ->
+        val dim = StandByDimming.compute(level)
+        _diagnostics.value = _diagnostics.value.copy(
+          requestedWindowBrightness = dim.windowBrightness,
+          softwareDimLevel = dim.softwareDimAlpha,
+        )
+      }
+    }
+  }
 
   /** Returns true if READ_CALENDAR permission is currently granted. */
   fun hasCalendarPermission(): Boolean =

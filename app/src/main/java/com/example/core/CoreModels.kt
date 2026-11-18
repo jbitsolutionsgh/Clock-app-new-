@@ -84,6 +84,9 @@ data class EarbudDiagnostics(
   val lastKeyCodeLabel: String = "None",
   val lastKeyTimeLabel: String = "Never",
   val lastActionExecuted: String = "None",
+  val otherAppPlaying: Boolean = false,
+  val reprimeCount: Int = 0,
+  val lastReprimeTimeLabel: String = "Never",
 )
 
 /** Public entry interface for starting, stopping, and observing the earbud listener service. */
@@ -119,6 +122,8 @@ data class StandByDiagnostics(
   val lastRefreshTimeLabel: String = "Never",
   val standByLastStartedLabel: String = "Never",
   val standByLastEventCount: Int = 0,
+  val requestedWindowBrightness: Float = 0.545f,
+  val softwareDimLevel: Float = 0.65f,
 )
 
 /** Public contract in core so DiagnosticsScreen and StandByStage can track Stand By status via core. */

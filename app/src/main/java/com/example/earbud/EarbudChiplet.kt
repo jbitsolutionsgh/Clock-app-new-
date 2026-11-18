@@ -54,6 +54,7 @@ import com.example.ui.theme.OledBlack
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 
 /**
  * Public entry point for the earbud chiplet.
@@ -113,6 +114,30 @@ object EarbudChiplet {
 
   internal fun updateServiceRunning(running: Boolean) {
     _diagnostics.value = _diagnostics.value.copy(serviceRunning = running)
+  }
+
+  internal fun updateOtherAppPlaying(playing: Boolean) {
+    _diagnostics.value = _diagnostics.value.copy(otherAppPlaying = playing)
+  }
+
+  internal fun recordReprime(timeLabel: String) {
+    _diagnostics.value = _diagnostics.value.copy(
+      reprimeCount = _diagnostics.value.reprimeCount + 1,
+      lastReprimeTimeLabel = timeLabel,
+    )
+  }
+
+  /** Notifies the running service to re-check active playback if the user switched back to AuraClock actions. */
+  fun notifyOtherAudioPolicyChanged(context: Context) {
+    val appContext = context.applicationContext
+    val prefs = CoreSingletons.prefs(appContext)
+    if (!prefs.earbudEnabled.value || !prefs.earbudTakeOverDuringAudio.value) return
+    runCatching {
+      val intent = Intent(appContext, EarbudListenerService::class.java).apply {
+        action = EarbudListenerService.ACTION_RECHECK_PLAYBACK
+      }
+      ContextCompat.startForegroundService(appContext, intent)
+    }
   }
 
   /** Returns (id, label) pairs for all available earbud button actions. */
@@ -231,6 +256,43 @@ object EarbudChiplet {
         }
       }
 
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Earbud Audio Routing",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Text(
+            text = "Another app playing: ${if (diag.otherAppPlaying) "Yes" else "No"}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (diag.otherAppPlaying) Color(0xFFF59E0B) else Color(0xFF10B981),
+            modifier = Modifier.testTag("diag_other_app_playing"),
+          )
+          Text(
+            text = "Re-primes: ${diag.reprimeCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_reprime_count"),
+          )
+          Text(
+            text = "Last re-prime: ${diag.lastReprimeTimeLabel}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_last_reprime_time"),
+          )
+        }
+      }
+
       Button(
         onClick = { speaker.speakCurrentTime() },
         shape = RoundedCornerShape(16.dp),
@@ -295,6 +357,18 @@ object EarbudChiplet {
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White,
             modifier = Modifier.testTag("diag_standby_events_shown"),
+          )
+          Text(
+            text = "Requested window brightness: ${(standByDiag.requestedWindowBrightness * 100).roundToInt()}%",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_standby_window_brightness"),
+          )
+          Text(
+            text = "Software dim level: ${(standByDiag.softwareDimLevel * 100).roundToInt()}%",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_standby_software_dim"),
           )
         }
       }

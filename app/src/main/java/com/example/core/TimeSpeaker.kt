@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,8 +43,22 @@ class TimeSpeaker(context: Context) {
 
   private var tts: TextToSpeech? = null
   private var pendingUtterance: String? = null
+  @Volatile
+  private var lastSpeechActivityElapsedMs: Long = -1L
+  @Volatile
+  private var speakingNow: Boolean = false
 
-  private val safetyReleaseRunnable = Runnable { abandonFocus() }
+  private val safetyReleaseRunnable = Runnable {
+    speakingNow = false
+    lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
+    abandonFocus()
+  }
+
+  /** Returns the elapsedRealtime timestamp of AuraClock's most recent TTS speech activity, or -1 if never. */
+  fun lastSpeechElapsedMs(): Long = lastSpeechActivityElapsedMs
+
+  /** Returns true while TTS is actively speaking an utterance. */
+  fun isCurrentlySpeaking(): Boolean = speakingNow
 
   init {
     initTts()
@@ -57,11 +72,26 @@ class TimeSpeaker(context: Context) {
         val langResult = engine.setLanguage(Locale.getDefault())
         engine.setAudioAttributes(speechAttributes)
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-          override fun onStart(utteranceId: String?) {}
-          override fun onDone(utteranceId: String?) = abandonFocus()
+          override fun onStart(utteranceId: String?) {
+            speakingNow = true
+            lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
+          }
+          override fun onDone(utteranceId: String?) {
+            speakingNow = false
+            lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
+            abandonFocus()
+          }
           @Deprecated("Deprecated in Java")
-          override fun onError(utteranceId: String?) = abandonFocus()
-          override fun onError(utteranceId: String?, errorCode: Int) = abandonFocus()
+          override fun onError(utteranceId: String?) {
+            speakingNow = false
+            lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
+            abandonFocus()
+          }
+          override fun onError(utteranceId: String?, errorCode: Int) {
+            speakingNow = false
+            lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
+            abandonFocus()
+          }
         })
         if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
           _isReady.value = true
@@ -96,6 +126,8 @@ class TimeSpeaker(context: Context) {
       if (tts == null) initTts()
       return
     }
+    speakingNow = true
+    lastSpeechActivityElapsedMs = SystemClock.elapsedRealtime()
     requestTransientFocus()
     mainHandler.removeCallbacks(safetyReleaseRunnable)
     mainHandler.postDelayed(safetyReleaseRunnable, 8_000L)

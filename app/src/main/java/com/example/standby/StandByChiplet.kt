@@ -436,12 +436,15 @@ object StandByChiplet {
       StandByStage(
         coordinator = coordinator,
         prefs = prefs,
-        applyDimAlpha = true,
         isDreamService = false,
         modifier = Modifier.fillMaxSize(),
       )
     }
   }
+
+  /** Shared dim mapping function used by Stand By preview and StandByStage. */
+  internal fun computePreviewDimValues(sliderLevel: Float): StandByDimValues =
+    StandByDimming.compute(sliderLevel)
 }
 
 private fun openDreamSettings(context: Context) {

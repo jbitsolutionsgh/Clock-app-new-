@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -67,15 +66,49 @@ private sealed interface StandByEventRow {
 }
 
 /**
+ * Computed brightness values shared identically between Stand By preview and StandByDreamService.
+ */
+internal data class StandByDimValues(
+  val sliderLevel: Float,
+  val softwareDimAlpha: Float,
+  val windowBrightness: Float,
+)
+
+/**
+ * Shared dim calculation used by StandByStage (both preview and DreamService),
+ * StandByDreamService window brightness, and Stand By diagnostics.
+ */
+internal object StandByDimming {
+  /**
+   * Computes both the software black-overlay alpha (`1 - sliderLevel`) and a balanced
+   * DreamService window brightness so the combined dimming matches the slider without
+   * double-darkening at night (0% dim at 1.0, clearly dark at 0.15).
+   */
+  fun compute(sliderLevel: Float): StandByDimValues {
+    val clamped = sliderLevel.coerceIn(0.10f, 1.0f)
+    val softwareAlpha = if (clamped >= 0.999f) 0f else (1.0f - clamped).coerceIn(0.0f, 0.90f)
+    val windowBrightness = if (clamped >= 0.999f) {
+      1.0f
+    } else {
+      (0.30f + 0.70f * clamped).coerceIn(0.30f, 1.0f)
+    }
+    return StandByDimValues(
+      sliderLevel = clamped,
+      softwareDimAlpha = softwareAlpha,
+      windowBrightness = windowBrightness,
+    )
+  }
+}
+
+/**
  * Shared Stand By stage rendered by both StandByDreamService and the in-app Preview.
- * Applies OLED black background, optional preview alpha dimming, burn-in drift across both clock and events,
- * and automatic refresh on start, every 5 minutes, and on calendar ContentObserver changes.
+ * Applies OLED black background, a live black software-dim overlay over content in both modes,
+ * burn-in drift across clock and events, and automatic calendar refresh.
  */
 @Composable
 internal fun StandByStage(
   coordinator: StandByCalendarCoordinator,
   prefs: AuraPrefs,
-  applyDimAlpha: Boolean = true,
   isDreamService: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -168,20 +201,21 @@ internal fun StandByStage(
     else buildEventRows(context, calSnapshot.events, calSnapshot.calendars, showEventTitles)
   }
 
-  val stageModifier = modifier
-    .fillMaxSize()
-    .background(OledBlack)
-    .padding(horizontal = 20.dp, vertical = 16.dp)
-    .let { base ->
-      if (applyDimAlpha) base.alpha(dimLevel.coerceIn(0.15f, 1.0f)) else base
-    }
-    .offset { IntOffset(dx, dy) }
-    .testTag("standby_stage_root")
+  val dimValues = StandByDimming.compute(dimLevel)
 
-  BoxWithConstraints(
-    modifier = stageModifier,
-    contentAlignment = Alignment.Center,
+  Box(
+    modifier = modifier
+      .fillMaxSize()
+      .background(OledBlack)
+      .testTag("standby_stage_root"),
   ) {
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 20.dp, vertical = 16.dp)
+        .offset { IntOffset(dx, dy) },
+      contentAlignment = Alignment.Center,
+    ) {
     val isLandscape = maxWidth > maxHeight
     when {
       !calendarEnabled -> {
@@ -274,6 +308,16 @@ internal fun StandByStage(
           )
         }
       }
+    }
+    }
+
+    if (dimValues.softwareDimAlpha > 0f) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = dimValues.softwareDimAlpha))
+          .testTag("standby_software_dim_overlay"),
+      )
     }
   }
 }

@@ -1,6 +1,7 @@
 package com.example.standby
 
 import android.service.dreams.DreamService
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
@@ -18,7 +19,7 @@ import com.example.ui.theme.AuraClockTheme
 
 /**
  * System DreamService (charging screensaver) hosting the shared StandByStage
- * with clock, upcoming calendar events, dimmed brightness, and burn-in drift.
+ * with clock, upcoming calendar events, live software/window brightness dimming, and burn-in drift.
  */
 class StandByDreamService : DreamService(), LifecycleOwner, SavedStateRegistryOwner {
 
@@ -45,21 +46,24 @@ class StandByDreamService : DreamService(), LifecycleOwner, SavedStateRegistryOw
 
     val prefs = CoreSingletons.prefs(this)
     val coordinator = StandByChiplet.coordinator(this)
-    window?.attributes = window?.attributes?.apply {
-      screenBrightness = prefs.standByDimLevel.value.coerceIn(0.1f, 1.0f)
-    }
+    applyWindowBrightness(computeDimValues(prefs.standByDimLevel.value).windowBrightness)
 
     val composeView = ComposeView(this).apply {
       setViewTreeLifecycleOwner(this@StandByDreamService)
       setViewTreeSavedStateRegistryOwner(this@StandByDreamService)
       setContent {
         val accent by prefs.themeColor.collectAsStateWithLifecycle()
+        val dimLevel by prefs.standByDimLevel.collectAsStateWithLifecycle()
+        val dimValues = computeDimValues(dimLevel)
+
+        LaunchedEffect(dimValues.windowBrightness) {
+          applyWindowBrightness(dimValues.windowBrightness)
+        }
 
         AuraClockTheme(accent = accent) {
           StandByStage(
             coordinator = coordinator,
             prefs = prefs,
-            applyDimAlpha = false,
             isDreamService = true,
             modifier = Modifier,
           )
@@ -73,6 +77,21 @@ class StandByDreamService : DreamService(), LifecycleOwner, SavedStateRegistryOw
     }
     setContentView(composeView)
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+  }
+
+  private fun applyWindowBrightness(targetBrightness: Float) {
+    val w = window ?: return
+    val attrs = w.attributes ?: return
+    if (attrs.screenBrightness != targetBrightness) {
+      attrs.screenBrightness = targetBrightness
+      w.attributes = attrs
+    }
+  }
+
+  companion object {
+    /** Shared dim mapping function used by StandByDreamService and StandByStage. */
+    internal fun computeDimValues(sliderLevel: Float): StandByDimValues =
+      StandByDimming.compute(sliderLevel)
   }
 
   override fun onDreamingStarted() {

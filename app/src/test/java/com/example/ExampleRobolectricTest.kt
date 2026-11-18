@@ -1178,6 +1178,151 @@ class ExampleRobolectricTest {
     assertTrue(provDenied.any { it.source == "Heart Rate" && it.origin == com.example.core.WffDataSourceOrigin.NO_DATA && it.detail == "Permission needed" })
   }
 
+  @Test
+  fun `playback reprime logic enforces 400ms debounce 1s self audio ignore window 3s rate limit and setting`() {
+    // Normal external playback -> debounces 400ms
+    val initial = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 10_000L,
+      hasExternalAudio = true,
+      takeOverEnabled = true,
+      lastSelfAudioMs = 2_000L,
+      lastReprimeMs = -1L,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.SCHEDULE, initial.action)
+    assertEquals(400L, initial.delayMs)
+    assertTrue(initial.isExternalPlaying)
+
+    // Own prime or TTS speech within 1s ignore window -> ignored completely
+    val selfPrimeIgnored = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 10_900L,
+      hasExternalAudio = true,
+      takeOverEnabled = true,
+      lastSelfAudioMs = 10_400L,
+      lastReprimeMs = 10_400L,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.IGNORE, selfPrimeIgnored.action)
+    assertTrue(selfPrimeIgnored.ignoredSelfAudio)
+
+    val speakingIgnored = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 15_000L,
+      hasExternalAudio = true,
+      takeOverEnabled = true,
+      lastSelfAudioMs = 12_000L,
+      lastReprimeMs = 10_400L,
+      isCurrentlySpeaking = true,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.IGNORE, speakingIgnored.action)
+    assertTrue(speakingIgnored.ignoredSelfAudio)
+
+    // Rate limit: re-primed at 10_400L, new external callback at 11_500L -> delayed until 13_400L (1900ms wait)
+    val rateLimited = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 11_500L,
+      hasExternalAudio = true,
+      takeOverEnabled = true,
+      lastSelfAudioMs = 10_400L,
+      lastReprimeMs = 10_400L,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.SCHEDULE, rateLimited.action)
+    assertEquals(1_900L, rateLimited.delayMs)
+    assertFalse(
+      com.example.earbud.PlaybackReprimeLogic.canExecuteReprimeNow(
+        nowMs = 12_900L,
+        takeOverEnabled = true,
+        lastSelfAudioMs = 10_400L,
+        lastReprimeMs = 10_400L,
+      ),
+    )
+    assertTrue(
+      com.example.earbud.PlaybackReprimeLogic.canExecuteReprimeNow(
+        nowMs = 13_400L,
+        takeOverEnabled = true,
+        lastSelfAudioMs = 10_400L,
+        lastReprimeMs = 10_400L,
+      ),
+    )
+
+    // Setting "Let the music app keep them" (takeOverEnabled = false) skips re-prime while tracking playback
+    val letMusicKeep = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 20_000L,
+      hasExternalAudio = true,
+      takeOverEnabled = false,
+      lastSelfAudioMs = 10_400L,
+      lastReprimeMs = 10_400L,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.IGNORE, letMusicKeep.action)
+    assertFalse(letMusicKeep.ignoredSelfAudio)
+    assertTrue(letMusicKeep.isExternalPlaying)
+
+    // External playback stopped -> cancels pending debounce
+    val stopped = com.example.earbud.PlaybackReprimeLogic.evaluatePlaybackChange(
+      nowMs = 21_000L,
+      hasExternalAudio = false,
+      takeOverEnabled = true,
+      lastSelfAudioMs = 10_400L,
+      lastReprimeMs = 10_400L,
+    )
+    assertEquals(com.example.earbud.ReprimePlanAction.CANCEL_PENDING, stopped.action)
+    assertFalse(stopped.isExternalPlaying)
+
+    // Prefs persistence for "Earbud buttons while other audio is playing"
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    assertTrue(prefs.earbudTakeOverDuringAudio.value)
+    prefs.setEarbudTakeOverDuringAudio(false)
+    assertFalse(AuraPrefs(context).earbudTakeOverDuringAudio.value)
+
+    // Verify all media keys (play/pause/hook single, double, next/previous) reach MediaKeyRouter
+    prefs.setPlayPauseActionId(AuraPrefs.ACTION_SPEAK_TIME)
+    prefs.setPlayPauseDoubleActionId(AuraPrefs.ACTION_TIMER_TOGGLE)
+    prefs.setNextActionId(AuraPrefs.ACTION_TIMER_TOGGLE)
+    prefs.setPreviousActionId(AuraPrefs.ACTION_NEXT_FACE)
+    val seenKeys = mutableListOf<String>()
+    val router = MediaKeyRouter(context, prefs) { keyLabel, _, _ -> seenKeys += keyLabel }
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_HEADSETHOOK)))
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_HEADSETHOOK)))
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT)))
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PREVIOUS)))
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY)))
+    assertTrue(router.handleKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE)))
+    assertTrue(seenKeys.any { it.contains("KEYCODE_HEADSETHOOK") })
+    assertTrue(seenKeys.any { it.contains("KEYCODE_MEDIA_NEXT") })
+    assertTrue(seenKeys.any { it.contains("KEYCODE_MEDIA_PREVIOUS") })
+  }
+
+  @Test
+  fun `standby preview and dream service use identical dim value function and update live`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val prefs = AuraPrefs(context)
+    val coordinator = StandByCalendarCoordinator(context, prefs)
+
+    for (level in listOf(0.15f, 0.35f, 0.65f, 1.0f)) {
+      val previewDim = com.example.standby.StandByChiplet.computePreviewDimValues(level)
+      val dreamDim = com.example.standby.StandByDreamService.computeDimValues(level)
+      assertEquals(previewDim, dreamDim)
+    }
+
+    // At 100%, nothing is dimmed
+    val fullDim = com.example.standby.StandByDreamService.computeDimValues(1.0f)
+    assertEquals(0f, fullDim.softwareDimAlpha, 0.001f)
+    assertEquals(1.0f, fullDim.windowBrightness, 0.001f)
+
+    // At 15%, software dim is 0.85 (1 - 0.15) and window brightness is balanced (not double-crushed to 0.15)
+    val nightDim = com.example.standby.StandByDreamService.computeDimValues(0.15f)
+    assertEquals(0.85f, nightDim.softwareDimAlpha, 0.001f)
+    assertEquals(0.405f, nightDim.windowBrightness, 0.001f)
+
+    // Changing slider updates coordinator diagnostics live
+    prefs.setStandByDimLevel(0.15f)
+    kotlinx.coroutines.delay(50)
+    assertEquals(0.85f, coordinator.diagnostics.value.softwareDimLevel, 0.001f)
+    assertEquals(0.405f, coordinator.diagnostics.value.requestedWindowBrightness, 0.001f)
+
+    prefs.setStandByDimLevel(1.0f)
+    kotlinx.coroutines.delay(50)
+    assertEquals(0.0f, coordinator.diagnostics.value.softwareDimLevel, 0.001f)
+    assertEquals(1.0f, coordinator.diagnostics.value.requestedWindowBrightness, 0.001f)
+  }
+
   private fun buildMinimalTestArsc(
     globalStrings: List<String>,
     typeName: String,

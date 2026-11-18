@@ -54,6 +54,9 @@ class AuraPrefs(context: Context) {
   private val _earbudEnabled = MutableStateFlow(prefs.getBoolean(KEY_EARBUD_ENABLED, true))
   val earbudEnabled: StateFlow<Boolean> = _earbudEnabled.asStateFlow()
 
+  private val _earbudTakeOverDuringAudio = MutableStateFlow(prefs.getBoolean(KEY_EARBUD_TAKE_OVER_AUDIO, true))
+  val earbudTakeOverDuringAudio: StateFlow<Boolean> = _earbudTakeOverDuringAudio.asStateFlow()
+
   private val _playPauseActionId = MutableStateFlow(prefs.getString(KEY_ACTION_PLAY_PAUSE, ACTION_SPEAK_TIME) ?: ACTION_SPEAK_TIME)
   val playPauseActionId: StateFlow<String> = _playPauseActionId.asStateFlow()
 
@@ -191,6 +194,15 @@ class AuraPrefs(context: Context) {
   fun setEarbudEnabled(enabled: Boolean) {
     prefs.edit().putBoolean(KEY_EARBUD_ENABLED, enabled).apply()
     _earbudEnabled.value = enabled
+  }
+
+  /**
+   * Configures whether AuraClock re-primes media buttons when another app plays audio (true),
+   * or lets the music app keep media buttons (false).
+   */
+  fun setEarbudTakeOverDuringAudio(takeOver: Boolean) {
+    prefs.edit().putBoolean(KEY_EARBUD_TAKE_OVER_AUDIO, takeOver).apply()
+    _earbudTakeOverDuringAudio.value = takeOver
   }
 
   /** Assigns an action ID to single Play/Pause earbud presses. */
@@ -482,6 +494,7 @@ class AuraPrefs(context: Context) {
     private const val KEY_SOUND_NAME = "sound_name"
     private const val KEY_SELECTED_FACE = "selected_face"
     private const val KEY_EARBUD_ENABLED = "earbud_enabled"
+    private const val KEY_EARBUD_TAKE_OVER_AUDIO = "earbud_take_over_audio"
     private const val KEY_ACTION_PLAY_PAUSE = "action_play_pause"
     private const val KEY_ACTION_PLAY_PAUSE_DOUBLE = "action_play_pause_double"
     private const val KEY_ACTION_NEXT = "action_next"

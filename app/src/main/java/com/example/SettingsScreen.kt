@@ -124,6 +124,7 @@ fun SettingsScreen(
   val timerGoFullScreenOnStart by prefs.timerGoFullScreenOnStart.collectAsStateWithLifecycle()
 
   val earbudEnabled by prefs.earbudEnabled.collectAsStateWithLifecycle()
+  val earbudTakeOver by prefs.earbudTakeOverDuringAudio.collectAsStateWithLifecycle()
   val playPauseAction by prefs.playPauseActionId.collectAsStateWithLifecycle()
   val playPauseDoubleAction by prefs.playPauseDoubleActionId.collectAsStateWithLifecycle()
   val nextAction by prefs.nextActionId.collectAsStateWithLifecycle()
@@ -341,6 +342,32 @@ fun SettingsScreen(
           checked = earbudEnabled,
           onCheckedChange = { earbudController.setListenerEnabled(it) },
           modifier = Modifier.testTag("settings_earbud_switch"),
+        )
+      }
+
+      Text(
+        text = "Earbud buttons while other audio is playing",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OtherAudioChoiceRow(
+          label = "AuraClock actions (default)",
+          selected = earbudTakeOver,
+          testTag = "earbud_other_audio_auraclock",
+          onClick = {
+            prefs.setEarbudTakeOverDuringAudio(true)
+            EarbudChiplet.notifyOtherAudioPolicyChanged(context)
+          },
+        )
+        OtherAudioChoiceRow(
+          label = "Let the music app keep them",
+          selected = !earbudTakeOver,
+          testTag = "earbud_other_audio_music",
+          onClick = { prefs.setEarbudTakeOverDuringAudio(false) },
         )
       }
 
@@ -567,6 +594,47 @@ private fun ActionMappingRow(
       Text(currentAction, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
     }
     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Choose action")
+  }
+}
+
+@Composable
+private fun OtherAudioChoiceRow(
+  label: String,
+  selected: Boolean,
+  testTag: String,
+  onClick: () -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(12.dp))
+      .background(
+        if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant,
+      )
+      .border(
+        width = if (selected) 1.5.dp else 1.dp,
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        shape = RoundedCornerShape(12.dp),
+      )
+      .clickable(onClick = onClick)
+      .padding(horizontal = 14.dp, vertical = 12.dp)
+      .testTag(testTag),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.bodyLarge,
+      color = Color.White,
+    )
+    if (selected) {
+      Icon(
+        imageVector = Icons.Default.Check,
+        contentDescription = "Selected",
+        tint = MaterialTheme.colorScheme.primary,
+      )
+    }
   }
 }
 
