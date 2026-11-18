@@ -310,7 +310,11 @@ internal object WatchFaceRegistry {
   fun reloadWff(context: Context) {
     val appCtx = context.applicationContext
     FaceAssetRepository.ensureInitialized(appCtx)
-    val stored = WffStorageManager.loadAll(appCtx)
+    val stored = if (com.example.core.StartupSafetyNet.isSafeModeActive) {
+      emptyList()
+    } else {
+      WffStorageManager.loadAll(appCtx)
+    }
     _wffFaces.value = stored
     _facesFlow.value = buildFaceList(stored)
     FaceAssetRepository.updateWffDiagnostics(

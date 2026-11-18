@@ -58,6 +58,17 @@ object CoreSingletons {
       prefsInstance ?: AuraPrefs(context.applicationContext).also { prefsInstance = it }
     }
 
+  /** Synchronously wipes SharedPreferences and resets any cached AuraPrefs instance to defaults. */
+  fun clearPreferences(context: Context) {
+    val appCtx = context.applicationContext
+    val current = prefsInstance
+    if (current != null) {
+      current.clearAndReset()
+    } else {
+      appCtx.getSharedPreferences("auraclock_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+    }
+  }
+
   /** Returns the single shared TimeSpeaker instance. */
   fun speaker(context: Context): TimeSpeaker =
     speakerInstance ?: synchronized(this) {

@@ -43,6 +43,7 @@ class TimerEngine(
 
   private var tickJob: Job? = null
   private var targetEndElapsedMs: Long = 0L
+  private var foregroundServiceRequested: Boolean = false
 
   /** Sets a new timer duration in seconds and resets to IDLE. */
   override fun setDurationSeconds(seconds: Int) {
@@ -240,6 +241,7 @@ class TimerEngine(
   }
 
   private fun startForegroundService() {
+    foregroundServiceRequested = true
     runCatching {
       val intent = Intent(appContext, TimerForegroundService::class.java).apply {
         action = TimerForegroundService.ACTION_START
@@ -249,6 +251,8 @@ class TimerEngine(
   }
 
   private fun stopServiceIfRunning() {
+    if (!foregroundServiceRequested) return
+    foregroundServiceRequested = false
     runCatching {
       val intent = Intent(appContext, TimerForegroundService::class.java).apply {
         action = TimerForegroundService.ACTION_STOP_SERVICE

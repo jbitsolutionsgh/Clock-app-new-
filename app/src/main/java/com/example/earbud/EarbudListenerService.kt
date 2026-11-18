@@ -50,21 +50,28 @@ class EarbudListenerService : Service() {
   override fun onCreate() {
     super.onCreate()
     isDestroyed = false
-    ensureChannel()
-    detectInitialExternalPlayback()
-    setupMediaSession()
-    registerPlaybackCallback()
+    runCatching { ensureChannel() }
+    runCatching { detectInitialExternalPlayback() }
+    runCatching { setupMediaSession() }
+    runCatching { registerPlaybackCallback() }
     EarbudChiplet.updateServiceRunning(true)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // Satisfy Android's startForegroundService contract on every path before any early return or stopSelf().
+    runCatching { startInForeground(buildNotification()) }
+
     val prefs = CoreSingletons.prefs(this)
     if (!prefs.earbudEnabled.value) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+      } else {
+        @Suppress("DEPRECATION")
+        stopForeground(true)
+      }
       stopSelf()
       return START_NOT_STICKY
     }
-
-    startInForeground(buildNotification())
 
     if (intent?.action == ACTION_FORWARD_MEDIA_BUTTON) {
       val keyEvent = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
@@ -72,8 +79,10 @@ class EarbudListenerService : Service() {
         EarbudChiplet.router(this).handleKeyEvent(keyEvent)
       }
     } else if (intent?.action == ACTION_RECHECK_PLAYBACK && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-      handlePlaybackConfigurationsChanged(audioManager.activePlaybackConfigurations)
+      val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      if (audioManager != null) {
+        handlePlaybackConfigurationsChanged(audioManager.activePlaybackConfigurations)
+      }
     }
 
     return START_STICKY
@@ -168,7 +177,7 @@ class EarbudListenerService : Service() {
 
   /** Checks active audio before initial priming so Diagnostics starts with an accurate reading. */
   private fun detectInitialExternalPlayback() {
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
     val playing = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       hasRelevantExternalAudio(audioManager.activePlaybackConfigurations)
     } else {
@@ -181,7 +190,7 @@ class EarbudListenerService : Service() {
   /** Registers an AudioManager playback callback on the main handler (API 26+). */
   private fun registerPlaybackCallback() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
     val cb = object : AudioManager.AudioPlaybackCallback() {
       override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
         handlePlaybackConfigurationsChanged(configs.orEmpty())
@@ -195,15 +204,15 @@ class EarbudListenerService : Service() {
   private fun unregisterPlaybackCallback() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val cb = playbackCallback ?: return
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    runCatching { audioManager.unregisterAudioPlaybackCallback(cb) }
+    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    runCatching { audioManager?.unregisterAudioPlaybackCallback(cb) }
     playbackCallback = null
   }
 
   @RequiresApi(Build.VERSION_CODES.O)
   private fun hasRelevantExternalAudio(configs: List<AudioPlaybackConfiguration>): Boolean =
     configs.any { cfg ->
-      val usage = cfg.audioAttributes.usage
+      val usage = cfg.audioAttributes?.usage
       usage == AudioAttributes.USAGE_MEDIA ||
         usage == AudioAttributes.USAGE_GAME ||
         usage == AudioAttributes.USAGE_UNKNOWN

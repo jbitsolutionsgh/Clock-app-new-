@@ -36,6 +36,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -55,7 +57,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.AuraThemeColor
 import com.example.core.CoreSingletons
+import com.example.core.StartupSafetyNet
 import com.example.earbud.EarbudChiplet
 import com.example.faces.FacesChiplet
 import com.example.standby.StandByChiplet
@@ -77,27 +81,66 @@ enum class AppTab(
 }
 
 /**
- * Main activity hosting AuraClock's OLED pure-black adaptive navigation shell.
+ * Main activity hosting AuraClock's OLED pure-black adaptive navigation shell
+ * and the StartupSafetyNet recovery screen after repeated startup crashes.
  */
 class MainActivity : ComponentActivity() {
   override fun onStart() {
     super.onStart()
-    EarbudChiplet.ensureInitialized(this).ensureStarted()
+    if (!StartupSafetyNet.shouldShowRecoveryScreen(this) && !StartupSafetyNet.isSafeModeActive) {
+      runCatching { EarbudChiplet.ensureInitialized(this).ensureStarted() }
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (!StartupSafetyNet.shouldShowRecoveryScreen(this)) {
+      StartupSafetyNet.beginStartupAttempt(this)
+    }
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
       navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
     )
     setContent {
       val context = LocalContext.current
-      val prefs = remember { CoreSingletons.prefs(context) }
-      val accent by prefs.themeColor.collectAsStateWithLifecycle()
+      var inRecoveryMode by remember {
+        mutableStateOf(StartupSafetyNet.shouldShowRecoveryScreen(context))
+      }
+      var recoveryNonce by remember { mutableIntStateOf(0) }
 
-      AuraClockTheme(accent = accent) {
-        AuraClockRoot()
+      if (inRecoveryMode) {
+        val errorReport = remember(recoveryNonce) { StartupSafetyNet.buildErrorReport(context) }
+        AuraClockTheme(accent = AuraThemeColor.COBALT) {
+          StartupProblemScreen(
+            errorText = errorReport,
+            onStartSafeMode = {
+              StartupSafetyNet.enterSafeMode(context)
+              FacesChiplet.reloadFaces(context)
+              recoveryNonce++
+              inRecoveryMode = false
+            },
+            onClearFacesAndSettings = {
+              StartupSafetyNet.clearImportedFacesAndSettings(context)
+              FacesChiplet.reloadFaces(context)
+              recoveryNonce++
+              inRecoveryMode = false
+            },
+          )
+        }
+      } else {
+        key(recoveryNonce) {
+          val prefs = remember { CoreSingletons.prefs(context) }
+          val accent by prefs.themeColor.collectAsStateWithLifecycle()
+
+          LaunchedEffect(recoveryNonce) {
+            StartupSafetyNet.maybeRunStartupCrashHookForTest()
+            StartupSafetyNet.markStartupSucceeded(context)
+          }
+
+          AuraClockTheme(accent = accent) {
+            AuraClockRoot()
+          }
+        }
       }
     }
   }
@@ -272,11 +315,4 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
   is Activity -> this
   is ContextWrapper -> baseContext.findActivity()
   else -> null
-}
-
-@Composable
-private fun PlaceholderTab(name: String) {
-  Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-    Text(text = name, style = MaterialTheme.typography.headlineMedium)
-  }
 }

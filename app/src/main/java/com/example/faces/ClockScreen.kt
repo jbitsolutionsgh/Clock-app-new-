@@ -92,6 +92,11 @@ object FacesChiplet {
   private fun allFacePairs(): List<Pair<String, String>> =
     WatchFaceRegistry.faces.map { it.id to it.displayName }
 
+  /** Reloads registered faces (for example after Safe Mode toggle or clearing imported WFF faces). */
+  fun reloadFaces(context: Context) {
+    WatchFaceRegistry.reloadWff(context.applicationContext)
+  }
+
   /** Renders the interactive Clock tab with smooth sweep when visible and face picker chips. */
   @Composable
   fun Screen(modifier: Modifier = Modifier) {

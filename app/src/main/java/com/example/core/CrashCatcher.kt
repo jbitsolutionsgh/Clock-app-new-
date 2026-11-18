@@ -27,11 +27,12 @@ object CrashCatcher {
     val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
       writeCrashLog(appContext, thread, throwable)
+      StartupSafetyNet.recordUncaughtCrash(appContext, thread, throwable)
       previousHandler?.uncaughtException(thread, throwable)
     }
   }
 
-  /** Records a non-fatal caught error (such as a calendar query failure) to the offline log file. */
+  /** Records a non-fatal caught error (such as a startup step failure or calendar error) synchronously to disk. */
   fun logNonFatal(context: Context, title: String, throwable: Throwable) {
     runCatching {
       val sw = StringWriter()
@@ -43,24 +44,39 @@ object CrashCatcher {
       pw.println("---")
       throwable.printStackTrace(pw)
       pw.flush()
-      getCrashFile(context).writeText(sw.toString())
+      writeTextSync(getCrashFile(context), sw.toString())
     }
   }
 
-  /** Writes the stack trace and device header to internal files storage. */
-  private fun writeCrashLog(context: Context, thread: Thread, throwable: Throwable) {
+  /** Formats and synchronously writes a crash stack trace to internal files storage before restart. */
+  internal fun writeCrashLog(context: Context, thread: Thread, throwable: Throwable): String {
+    val text = buildCrashReport(thread, throwable)
     runCatching {
-      val sw = StringWriter()
-      val pw = PrintWriter(sw)
-      val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-      pw.println("AuraClock Crash Log")
-      pw.println("Time: $stamp")
-      pw.println("Thread: ${thread.name}")
-      pw.println("Device: ${Build.MANUFACTURER} ${Build.MODEL} (SDK ${Build.VERSION.SDK_INT})")
-      pw.println("---")
-      throwable.printStackTrace(pw)
-      pw.flush()
-      getCrashFile(context).writeText(sw.toString())
+      writeTextSync(getCrashFile(context), text)
+    }
+    return text
+  }
+
+  internal fun buildCrashReport(thread: Thread, throwable: Throwable): String {
+    val sw = StringWriter()
+    val pw = PrintWriter(sw)
+    val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+    pw.println("AuraClock Crash Log")
+    pw.println("Time: $stamp")
+    pw.println("Thread: ${thread.name}")
+    pw.println("Device: ${Build.MANUFACTURER} ${Build.MODEL} (SDK ${Build.VERSION.SDK_INT})")
+    pw.println("---")
+    throwable.printStackTrace(pw)
+    pw.flush()
+    return sw.toString()
+  }
+
+  private fun writeTextSync(file: File, content: String) {
+    file.parentFile?.mkdirs()
+    java.io.FileOutputStream(file).use { fos ->
+      fos.write(content.toByteArray(Charsets.UTF_8))
+      fos.flush()
+      runCatching { fos.fd.sync() }
     }
   }
 

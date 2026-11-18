@@ -36,31 +36,43 @@ class TimerForegroundService : Service() {
   private var wakeLock: PowerManager.WakeLock? = null
   private var lastNotifiedSecond: Long = -1L
   private var lastNotifiedPhase: TimerPhase? = null
+  private var isForegroundStarted: Boolean = false
 
   override fun onCreate() {
     super.onCreate()
-    ensureChannel()
+    runCatching { ensureChannel() }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_USER_STOP -> {
+        if (!isForegroundStarted) {
+          runCatching { startInForeground(buildNotification(TimerSnapshot())) }
+        }
         CoreSingletons.timerController?.stop()
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopForegroundCompat()
+        isForegroundStarted = false
         stopSelf()
         return START_NOT_STICKY
       }
       ACTION_STOP_SERVICE -> {
+        if (!isForegroundStarted) {
+          runCatching { startInForeground(buildNotification(TimerSnapshot())) }
+        }
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopForegroundCompat()
+        isForegroundStarted = false
         stopSelf()
         return START_NOT_STICKY
       }
       else -> {
         acquireWakeLock()
         val initial = CoreSingletons.timerController?.state?.value ?: TimerSnapshot()
-        startInForeground(buildNotification(initial))
+        runCatching {
+          startInForeground(buildNotification(initial))
+          isForegroundStarted = true
+        }
         observeTimerState()
         return START_NOT_STICKY
       }
@@ -70,10 +82,20 @@ class TimerForegroundService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onDestroy() {
+    isForegroundStarted = false
     observerJob?.cancel()
     serviceScope.cancel()
     releaseWakeLock()
     super.onDestroy()
+  }
+
+  private fun stopForegroundCompat() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION")
+      stopForeground(true)
+    }
   }
 
   private fun startInForeground(notification: Notification) {
@@ -170,10 +192,12 @@ class TimerForegroundService : Service() {
 
   private fun acquireWakeLock() {
     if (wakeLock?.isHeld == true) return
-    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AuraClock::TimerWakeLock").apply {
-      setReferenceCounted(false)
-      acquire(2 * 60 * 60 * 1000L)
+    runCatching {
+      val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+      wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AuraClock::TimerWakeLock").apply {
+        setReferenceCounted(false)
+        acquire(2 * 60 * 60 * 1000L)
+      }
     }
   }
 

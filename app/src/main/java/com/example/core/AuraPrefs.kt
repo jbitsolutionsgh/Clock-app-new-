@@ -18,97 +18,112 @@ class AuraPrefs(context: Context) {
   private val _themeColor = MutableStateFlow(loadThemeColor())
   val themeColor: StateFlow<AuraThemeColor> = _themeColor.asStateFlow()
 
-  private val _timerDurationSeconds = MutableStateFlow(prefs.getInt(KEY_TIMER_SECONDS, 60).coerceIn(1, 5999))
+  private val _timerDurationSeconds = MutableStateFlow(safeInt(KEY_TIMER_SECONDS, 60).coerceIn(1, 5999))
   val timerDurationSeconds: StateFlow<Int> = _timerDurationSeconds.asStateFlow()
 
   private val _quickPresets = MutableStateFlow(loadQuickPresets())
   val quickPresets: StateFlow<List<Int>> = _quickPresets.asStateFlow()
 
-  private val _roundsMode = MutableStateFlow(prefs.getBoolean(KEY_ROUNDS_MODE, false))
+  private val _roundsMode = MutableStateFlow(safeBoolean(KEY_ROUNDS_MODE, false))
   val roundsMode: StateFlow<Boolean> = _roundsMode.asStateFlow()
 
-  private val _roundGapSeconds = MutableStateFlow(prefs.getInt(KEY_ROUND_GAP_SECONDS, 1).coerceIn(0, 3))
+  private val _roundGapSeconds = MutableStateFlow(safeInt(KEY_ROUND_GAP_SECONDS, 1).coerceIn(0, 3))
   val roundGapSeconds: StateFlow<Int> = _roundGapSeconds.asStateFlow()
 
-  private val _turnIndicatorEnabled = MutableStateFlow(prefs.getBoolean(KEY_TURN_ENABLED, false))
+  private val _turnIndicatorEnabled = MutableStateFlow(safeBoolean(KEY_TURN_ENABLED, false))
   val turnIndicatorEnabled: StateFlow<Boolean> = _turnIndicatorEnabled.asStateFlow()
 
-  private val _turnGroupSize = MutableStateFlow(prefs.getInt(KEY_TURN_GROUP_SIZE, 4).coerceIn(2, 10))
+  private val _turnGroupSize = MutableStateFlow(safeInt(KEY_TURN_GROUP_SIZE, 4).coerceIn(2, 10))
   val turnGroupSize: StateFlow<Int> = _turnGroupSize.asStateFlow()
 
-  private val _beepDurationMs = MutableStateFlow(prefs.getInt(KEY_BEEP_DURATION_MS, 1500).coerceIn(500, 5000))
+  private val _beepDurationMs = MutableStateFlow(safeInt(KEY_BEEP_DURATION_MS, 1500).coerceIn(500, 5000))
   val beepDurationMs: StateFlow<Int> = _beepDurationMs.asStateFlow()
 
-  private val _useAlarmStream = MutableStateFlow(prefs.getBoolean(KEY_USE_ALARM_STREAM, true))
+  private val _useAlarmStream = MutableStateFlow(safeBoolean(KEY_USE_ALARM_STREAM, true))
   val useAlarmStream: StateFlow<Boolean> = _useAlarmStream.asStateFlow()
 
-  private val _soundUri = MutableStateFlow(prefs.getString(KEY_SOUND_URI, null))
+  private val _soundUri = MutableStateFlow(safeString(KEY_SOUND_URI, null))
   val soundUri: StateFlow<String?> = _soundUri.asStateFlow()
 
-  private val _soundName = MutableStateFlow(prefs.getString(KEY_SOUND_NAME, "Default Tone") ?: "Default Tone")
+  private val _soundName = MutableStateFlow(safeString(KEY_SOUND_NAME, "Default Tone") ?: "Default Tone")
   val soundName: StateFlow<String> = _soundName.asStateFlow()
 
-  private val _selectedFaceId = MutableStateFlow(prefs.getString(KEY_SELECTED_FACE, "motorsport_m") ?: "motorsport_m")
+  private val _selectedFaceId = MutableStateFlow(safeString(KEY_SELECTED_FACE, "motorsport_m") ?: "motorsport_m")
   val selectedFaceId: StateFlow<String> = _selectedFaceId.asStateFlow()
 
-  private val _earbudEnabled = MutableStateFlow(prefs.getBoolean(KEY_EARBUD_ENABLED, true))
+  private val _earbudEnabled = MutableStateFlow(safeBoolean(KEY_EARBUD_ENABLED, true))
   val earbudEnabled: StateFlow<Boolean> = _earbudEnabled.asStateFlow()
 
-  private val _earbudTakeOverDuringAudio = MutableStateFlow(prefs.getBoolean(KEY_EARBUD_TAKE_OVER_AUDIO, true))
+  private val _earbudTakeOverDuringAudio = MutableStateFlow(safeBoolean(KEY_EARBUD_TAKE_OVER_AUDIO, true))
   val earbudTakeOverDuringAudio: StateFlow<Boolean> = _earbudTakeOverDuringAudio.asStateFlow()
 
-  private val _playPauseActionId = MutableStateFlow(prefs.getString(KEY_ACTION_PLAY_PAUSE, ACTION_SPEAK_TIME) ?: ACTION_SPEAK_TIME)
+  private val _playPauseActionId = MutableStateFlow(safeString(KEY_ACTION_PLAY_PAUSE, ACTION_SPEAK_TIME) ?: ACTION_SPEAK_TIME)
   val playPauseActionId: StateFlow<String> = _playPauseActionId.asStateFlow()
 
-  private val _playPauseDoubleActionId = MutableStateFlow(prefs.getString(KEY_ACTION_PLAY_PAUSE_DOUBLE, ACTION_NONE) ?: ACTION_NONE)
+  private val _playPauseDoubleActionId = MutableStateFlow(safeString(KEY_ACTION_PLAY_PAUSE_DOUBLE, ACTION_NONE) ?: ACTION_NONE)
   val playPauseDoubleActionId: StateFlow<String> = _playPauseDoubleActionId.asStateFlow()
 
-  private val _nextActionId = MutableStateFlow(prefs.getString(KEY_ACTION_NEXT, ACTION_TIMER_TOGGLE) ?: ACTION_TIMER_TOGGLE)
+  private val _nextActionId = MutableStateFlow(safeString(KEY_ACTION_NEXT, ACTION_TIMER_TOGGLE) ?: ACTION_TIMER_TOGGLE)
   val nextActionId: StateFlow<String> = _nextActionId.asStateFlow()
 
-  private val _previousActionId = MutableStateFlow(prefs.getString(KEY_ACTION_PREVIOUS, ACTION_NEXT_FACE) ?: ACTION_NEXT_FACE)
+  private val _previousActionId = MutableStateFlow(safeString(KEY_ACTION_PREVIOUS, ACTION_NEXT_FACE) ?: ACTION_NEXT_FACE)
   val previousActionId: StateFlow<String> = _previousActionId.asStateFlow()
 
-  private val _standByUseSelectedFace = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_USE_SELECTED, false))
+  private val _standByUseSelectedFace = MutableStateFlow(safeBoolean(KEY_STANDBY_USE_SELECTED, false))
   val standByUseSelectedFace: StateFlow<Boolean> = _standByUseSelectedFace.asStateFlow()
 
-  private val _standByDimLevel = MutableStateFlow(prefs.getFloat(KEY_STANDBY_DIM, 0.35f).coerceIn(0.1f, 1.0f))
+  private val _standByDimLevel = MutableStateFlow(safeFloat(KEY_STANDBY_DIM, 0.35f).coerceIn(0.1f, 1.0f))
   val standByDimLevel: StateFlow<Float> = _standByDimLevel.asStateFlow()
 
-  private val _standByCalendarEnabled = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_CAL_ENABLED, true))
+  private val _standByCalendarEnabled = MutableStateFlow(safeBoolean(KEY_STANDBY_CAL_ENABLED, true))
   val standByCalendarEnabled: StateFlow<Boolean> = _standByCalendarEnabled.asStateFlow()
 
   private val _selectedCalendarIds = MutableStateFlow(loadSelectedCalendarIds())
   val selectedCalendarIds: StateFlow<Set<Long>> = _selectedCalendarIds.asStateFlow()
 
-  private val _standByMaxEvents = MutableStateFlow(prefs.getInt(KEY_STANDBY_MAX_EVENTS, 4).coerceIn(2, 6))
+  private val _standByMaxEvents = MutableStateFlow(safeInt(KEY_STANDBY_MAX_EVENTS, 4).coerceIn(2, 6))
   val standByMaxEvents: StateFlow<Int> = _standByMaxEvents.asStateFlow()
 
   private val _standByCalendarWindow = MutableStateFlow(
-    StandByCalendarWindow.fromId(prefs.getString(KEY_STANDBY_CAL_WINDOW, StandByCalendarWindow.TODAY_AND_TOMORROW.id)),
+    StandByCalendarWindow.fromId(safeString(KEY_STANDBY_CAL_WINDOW, StandByCalendarWindow.TODAY_AND_TOMORROW.id)),
   )
   val standByCalendarWindow: StateFlow<StandByCalendarWindow> = _standByCalendarWindow.asStateFlow()
 
-  private val _standByShowEventTitles = MutableStateFlow(prefs.getBoolean(KEY_STANDBY_SHOW_TITLES, true))
+  private val _standByShowEventTitles = MutableStateFlow(safeBoolean(KEY_STANDBY_SHOW_TITLES, true))
   val standByShowEventTitles: StateFlow<Boolean> = _standByShowEventTitles.asStateFlow()
 
-  private val _timerFullScreenByDefault = MutableStateFlow(prefs.getBoolean(KEY_TIMER_FULLSCREEN_DEFAULT, false))
+  private val _timerFullScreenByDefault = MutableStateFlow(safeBoolean(KEY_TIMER_FULLSCREEN_DEFAULT, false))
   val timerFullScreenByDefault: StateFlow<Boolean> = _timerFullScreenByDefault.asStateFlow()
 
-  private val _timerGoFullScreenOnStart = MutableStateFlow(prefs.getBoolean(KEY_TIMER_FULLSCREEN_ON_START, false))
+  private val _timerGoFullScreenOnStart = MutableStateFlow(safeBoolean(KEY_TIMER_FULLSCREEN_ON_START, false))
   val timerGoFullScreenOnStart: StateFlow<Boolean> = _timerGoFullScreenOnStart.asStateFlow()
 
-  private val _stepGoal = MutableStateFlow(prefs.getInt(KEY_STEP_GOAL, 10_000).coerceIn(1_000, 100_000))
+  private val _stepGoal = MutableStateFlow(safeInt(KEY_STEP_GOAL, 10_000).coerceIn(1_000, 100_000))
   val stepGoal: StateFlow<Int> = _stepGoal.asStateFlow()
 
-  private val _lastDailySteps = MutableStateFlow(prefs.getInt(KEY_STEP_LAST_DAILY, 0).coerceAtLeast(0))
+  private val _lastDailySteps = MutableStateFlow(safeInt(KEY_STEP_LAST_DAILY, 0).coerceAtLeast(0))
   val lastDailySteps: StateFlow<Int> = _lastDailySteps.asStateFlow()
 
+  private fun safeInt(key: String, default: Int): Int =
+    runCatching { prefs.getInt(key, default) }.getOrDefault(default)
+
+  private fun safeFloat(key: String, default: Float): Float =
+    runCatching { prefs.getFloat(key, default) }.getOrDefault(default)
+
+  private fun safeBoolean(key: String, default: Boolean): Boolean =
+    runCatching { prefs.getBoolean(key, default) }.getOrDefault(default)
+
+  private fun safeString(key: String, default: String?): String? =
+    runCatching { prefs.getString(key, default) }.getOrDefault(default)
+
+  private fun safeStringSet(key: String): Set<String>? =
+    runCatching { prefs.getStringSet(key, emptySet()) }.getOrNull()
+
   private fun loadThemeColor(): AuraThemeColor =
-    AuraThemeColor.fromId(prefs.getString(KEY_THEME_COLOR, AuraThemeColor.COBALT.id))
+    AuraThemeColor.fromId(safeString(KEY_THEME_COLOR, AuraThemeColor.COBALT.id))
 
   private fun loadQuickPresets(): List<Int> {
-    val raw = prefs.getString(KEY_QUICK_PRESETS, null) ?: return DEFAULT_PRESETS
+    val raw = safeString(KEY_QUICK_PRESETS, null) ?: return DEFAULT_PRESETS
     val parsed = raw.split(",").mapNotNull { it.trim().toIntOrNull()?.coerceIn(1, 5999) }
     return if (parsed.size == 5) parsed else DEFAULT_PRESETS
   }
@@ -243,18 +258,18 @@ class AuraPrefs(context: Context) {
   }
 
   private fun loadSelectedCalendarIds(): Set<Long> =
-    prefs.getStringSet(KEY_STANDBY_CAL_IDS, emptySet())
+    safeStringSet(KEY_STANDBY_CAL_IDS)
       ?.mapNotNull { it.toLongOrNull() }
       ?.toSet()
       ?: emptySet()
 
   /** Returns true once a non-empty calendar selection has been initialized. */
   fun hasInitializedCalendarSelection(): Boolean =
-    prefs.getBoolean(KEY_STANDBY_CAL_INITIALIZED, false)
+    safeBoolean(KEY_STANDBY_CAL_INITIALIZED, false)
 
   /** Returns true if the user manually edited calendar checkboxes in Settings. */
   fun hasUserEditedCalendarSelection(): Boolean =
-    prefs.getBoolean(KEY_STANDBY_CAL_USER_EDITED, false)
+    safeBoolean(KEY_STANDBY_CAL_USER_EDITED, false)
 
   /** Enables or disables the Stand By calendar event list. */
   fun setStandByCalendarEnabled(enabled: Boolean) {
@@ -310,7 +325,7 @@ class AuraPrefs(context: Context) {
 
   /** Reads saved (dayKey, bootCumulativeBaseline) for daily step computation. */
   fun readStepBaseline(): Pair<Int, Float> =
-    prefs.getInt(KEY_STEP_BASELINE_DAY, -1) to prefs.getFloat(KEY_STEP_BASELINE_VAL, -1f)
+    safeInt(KEY_STEP_BASELINE_DAY, -1) to safeFloat(KEY_STEP_BASELINE_VAL, -1f)
 
   /** Persists updated daily step baseline and current daily step total. */
   fun saveStepState(dayKey: Int, baseline: Float, dailySteps: Int) {
@@ -457,11 +472,11 @@ class AuraPrefs(context: Context) {
 
   /** Reads widget style ID for a specific appWidgetId. */
   fun getWidgetStyleId(widgetId: Int): String =
-    prefs.getString("widget_style_$widgetId", "motorsport_m") ?: "motorsport_m"
+    safeString("widget_style_$widgetId", "motorsport_m") ?: "motorsport_m"
 
   /** Reads widget accent colour ID for a specific appWidgetId. */
   fun getWidgetColorId(widgetId: Int): String =
-    prefs.getString("widget_color_$widgetId", AuraThemeColor.COBALT.id) ?: AuraThemeColor.COBALT.id
+    safeString("widget_color_$widgetId", AuraThemeColor.COBALT.id) ?: AuraThemeColor.COBALT.id
 
   /** Removes widget configuration when a widget instance is deleted from the home screen. */
   fun deleteWidgetConfig(widgetId: Int) {
@@ -469,6 +484,44 @@ class AuraPrefs(context: Context) {
       .remove("widget_style_$widgetId")
       .remove("widget_color_$widgetId")
       .apply()
+  }
+
+  /** Synchronously wipes all persisted preferences and resets reactive StateFlows to clean defaults. */
+  fun clearAndReset() {
+    prefs.edit().clear().commit()
+    _themeColor.value = AuraThemeColor.COBALT
+    _timerDurationSeconds.value = 60
+    _quickPresets.value = DEFAULT_PRESETS
+    _roundsMode.value = false
+    _roundGapSeconds.value = 1
+    _turnIndicatorEnabled.value = false
+    _turnGroupSize.value = 4
+    _beepDurationMs.value = 1500
+    _useAlarmStream.value = true
+    _soundUri.value = null
+    _soundName.value = "Default Tone"
+    _selectedFaceId.value = "motorsport_m"
+    _earbudEnabled.value = true
+    _earbudTakeOverDuringAudio.value = true
+    _playPauseActionId.value = ACTION_SPEAK_TIME
+    _playPauseDoubleActionId.value = ACTION_NONE
+    _nextActionId.value = ACTION_TIMER_TOGGLE
+    _previousActionId.value = ACTION_NEXT_FACE
+    _standByUseSelectedFace.value = false
+    _standByDimLevel.value = 0.35f
+    _standByCalendarEnabled.value = true
+    _selectedCalendarIds.value = emptySet()
+    _standByMaxEvents.value = 4
+    _standByCalendarWindow.value = StandByCalendarWindow.TODAY_AND_TOMORROW
+    _standByShowEventTitles.value = true
+    _timerFullScreenByDefault.value = false
+    _timerGoFullScreenOnStart.value = false
+    _stepGoal.value = 10_000
+    _lastDailySteps.value = 0
+    _wffFaceConfigs.value = emptyMap()
+    _wffComplicationProviders.value = emptyMap()
+    _wffSelectedFlavors.value = emptyMap()
+    _wffFacePhotos.value = emptyMap()
   }
 
   companion object {

@@ -108,7 +108,9 @@ internal data class WffResolvedComplication(
  */
 internal object WffComplicationResolver {
 
-  private val timeFmt = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+  private val timeFmt = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+  }
 
   /** Produces a [WffResolvedComplication] for [slot] using [provider] and live [data]. */
   fun resolve(
