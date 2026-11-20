@@ -24,7 +24,7 @@ class AuraClockApp : Application() {
   internal fun initializeApplication() {
     CrashCatcher.install(this)
     StartupSafetyNet.resetSessionStepFailures()
-    StartupSafetyNet.beginStartupAttempt(this)
+    StartupSafetyNet.beginApplicationStartupAttempt(this)
     StartupSafetyNet.maybeRunStartupCrashHookForTest()
 
     StartupSafetyNet.runOptionalStep(this, "Preferences") {

@@ -50,6 +50,7 @@ class StartupSafetyNetRobolectricTest {
     StartupSafetyNet.resetAllForTest(context)
     File(context.filesDir, "wff").deleteRecursively()
     File(context.filesDir, "last_crash.txt").delete()
+    File(context.filesDir, "startup_steps.txt").delete()
     CoreSingletons.clearPreferences(context)
     FacesChiplet.reloadFaces(context)
   }
@@ -136,7 +137,7 @@ class StartupSafetyNetRobolectricTest {
   }
 
   @Test
-  fun `optional startup step failure is isolated and recorded without stopping other chiplets`() {
+  fun `optional startup step failure is isolated and recorded in startup_steps without locking recovery`() {
     val context = ApplicationProvider.getApplicationContext<Application>()
     val app = context as AuraClockApp
 
@@ -154,8 +155,112 @@ class StartupSafetyNetRobolectricTest {
     assertTrue(failures.first().summary.contains("Injected Stand By step failure"))
     assertNotNull("Timer chiplet should still initialize", CoreSingletons.timerController)
     assertNotNull("Faces chiplet should still initialize", CoreSingletons.faceNavigator)
-    assertTrue("CrashCatcher should persist step failure", CrashCatcher.readLastCrashLog(context).orEmpty().contains("Injected Stand By step failure"))
+    assertTrue(
+      "CrashCatcher should persist non-fatal step failure to startup_steps.txt",
+      CrashCatcher.readStartupStepsLog(context).orEmpty().contains("Injected Stand By step failure"),
+    )
+    assertFalse("Non-fatal step failure must not create last_crash.txt", CrashCatcher.hasCrashLog(context))
     assertFalse("Single isolated non-fatal step failure must not lock recovery screen", StartupSafetyNet.shouldShowRecoveryScreen(context))
+  }
+
+  @Test
+  fun `ten background process starts in a row never trigger the recovery screen`() {
+    val context = ApplicationProvider.getApplicationContext<Application>()
+    val app = context as AuraClockApp
+
+    for (index in 1..10) {
+      val simulatedPid = 20_000 + index
+      StartupSafetyNet.pidProvider = { simulatedPid }
+      app.initializeApplication()
+
+      // MainActivity was never opened, so main-startup tracking must remain false.
+      assertFalse(
+        "Background process start #$index must not mark main startup in progress",
+        StartupSafetyNet.isMainStartupInProgressForTest(context),
+      )
+
+      if (index % 2 == 0) {
+        // Half the background processes outlive 5 seconds and let the main handler clear the mark.
+        assertTrue(StartupSafetyNet.isAppCreateTrackingActiveForTest(context))
+        Shadows.shadowOf(android.os.Looper.getMainLooper())
+          .idleFor(java.time.Duration.ofSeconds(5))
+        assertFalse(
+          "Main handler should clear Application.onCreate tracking after 5 seconds",
+          StartupSafetyNet.isAppCreateTrackingActiveForTest(context),
+        )
+      }
+      // Odd-numbered runs end before 5 seconds (next loop switches to a new PID without uncaught crash).
+    }
+
+    assertEquals(0, StartupSafetyNet.consecutiveStartupCrashCount(context))
+    assertFalse(StartupSafetyNet.shouldShowRecoveryScreen(context))
+  }
+
+  @Test
+  fun `two real startup crashes in a row trigger recovery across app create and main activity`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+
+    // Case 1: Two Application.onCreate crashes in a row count and trigger recovery.
+    StartupSafetyNet.pidProvider = { 30_001 }
+    StartupSafetyNet.simulateApplicationStartupCrashForTest(context, RuntimeException("App onCreate crash #1"))
+    assertEquals(1, StartupSafetyNet.consecutiveStartupCrashCount(context))
+    assertFalse(StartupSafetyNet.shouldShowRecoveryScreen(context))
+
+    StartupSafetyNet.pidProvider = { 30_002 }
+    StartupSafetyNet.simulateApplicationStartupCrashForTest(context, IllegalStateException("App onCreate crash #2"))
+    assertEquals(2, StartupSafetyNet.consecutiveStartupCrashCount(context))
+    assertTrue(StartupSafetyNet.shouldShowRecoveryScreen(context))
+
+    StartupSafetyNet.resetAllForTest(context)
+
+    // Case 2: Two silent process kills while MainActivity is opening also trigger recovery.
+    StartupSafetyNet.pidProvider = { 40_001 }
+    StartupSafetyNet.beginStartupAttempt(context)
+    assertTrue(StartupSafetyNet.isMainStartupInProgressForTest(context))
+
+    // Next real launch sees PID 40_001 died mid-main-startup -> counts crash #1.
+    StartupSafetyNet.pidProvider = { 40_002 }
+    StartupSafetyNet.beginStartupAttempt(context)
+    assertEquals(1, StartupSafetyNet.consecutiveStartupCrashCount(context))
+
+    // Next launch sees PID 40_002 also died mid-main-startup -> counts crash #2 and locks recovery.
+    StartupSafetyNet.pidProvider = { 40_003 }
+    StartupSafetyNet.beginStartupAttempt(context)
+    assertEquals(2, StartupSafetyNet.consecutiveStartupCrashCount(context))
+    assertTrue(StartupSafetyNet.shouldShowRecoveryScreen(context))
+  }
+
+  @Test
+  fun `non-fatal step failure does not erase a saved crash and Startup problem shows both`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+
+    // 1. Trigger two real startup crashes so a fatal crash is saved in last_crash.txt.
+    StartupSafetyNet.simulateStartupCrashForTest(context, RuntimeException("Fatal startup boom #1"))
+    StartupSafetyNet.simulateStartupCrashForTest(context, IllegalStateException("Fatal startup boom #2"))
+    assertTrue(StartupSafetyNet.shouldShowRecoveryScreen(context))
+    assertTrue(CrashCatcher.hasCrashLog(context))
+    val savedCrashBefore = CrashCatcher.readLastCrashLog(context).orEmpty()
+    assertTrue(savedCrashBefore.contains("Fatal startup boom #2"))
+
+    // 2. Log a non-fatal step failure; it must go to startup_steps.txt and leave last_crash.txt intact.
+    CrashCatcher.logNonFatal(
+      context,
+      "Startup step 'Stand By calendar' failed",
+      IllegalArgumentException("Non-fatal calendar glitch"),
+    )
+    assertEquals(savedCrashBefore, CrashCatcher.readLastCrashLog(context))
+    assertTrue(
+      CrashCatcher.readStartupStepsLog(context).orEmpty().contains("Non-fatal calendar glitch"),
+    )
+
+    // 3. Startup problem screen shows both last_crash.txt and startup_steps.txt.
+    ActivityScenario.launch(MainActivity::class.java).use {
+      composeRule.waitForIdle()
+      composeRule.onNodeWithTag("startup_problem_error_text")
+        .assertTextContains("Fatal startup boom #2", substring = true)
+      composeRule.onNodeWithTag("startup_problem_error_text")
+        .assertTextContains("Non-fatal calendar glitch", substring = true)
+    }
   }
 
   @Test

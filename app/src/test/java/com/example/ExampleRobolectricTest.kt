@@ -449,8 +449,9 @@ class ExampleRobolectricTest {
     assertEquals(3, coordinator.diagnostics.value.standByLastEventCount)
 
     CrashCatcher.logNonFatal(context, "Test Calendar Error", IllegalStateException("Provider unavailable"))
-    assertTrue(CrashCatcher.hasCrashLog(context))
-    assertTrue(CrashCatcher.readLastCrashLog(context).orEmpty().contains("Provider unavailable"))
+    assertTrue(CrashCatcher.hasStartupStepsLog(context))
+    assertTrue(CrashCatcher.readStartupStepsLog(context).orEmpty().contains("Provider unavailable"))
+    assertFalse(CrashCatcher.hasCrashLog(context))
   }
 
   @Test

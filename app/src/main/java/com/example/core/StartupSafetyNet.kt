@@ -3,6 +3,8 @@ package com.example.core
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import org.json.JSONObject
 import java.io.File
@@ -19,7 +21,9 @@ data class StartupStepFailure(
 
 /**
  * Startup Safety Net for AuraClock:
- * - Tracks consecutive crashes occurring during startup across launches.
+ * - Marks a startup attempt as "in progress" (`inMainStartup`) only when opening `MainActivity`.
+ * - Tracks `Application.onCreate` (`inAppCreate`) briefly for uncaught exceptions and clears it
+ *   after 5 seconds on the main handler (never counting background exits without an uncaught crash).
  * - Isolates optional Application/startup initialization steps so a single failure does not kill the app.
  * - Triggers the "Startup problem" recovery flow after 2 consecutive startup crashes, with Copy, Share,
  *   Safe Mode, and full WFF/preferences reset actions.
@@ -28,9 +32,14 @@ object StartupSafetyNet {
 
   private const val STATE_FILE_NAME = "startup_safety.json"
   private const val MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY = 2
+  internal const val APP_CREATE_CLEAR_DELAY_MS = 5_000L
 
   private val lock = Any()
   private val _stepFailures = mutableListOf<StartupStepFailure>()
+  private var appCreateTokenCounter = 0L
+  private var pendingAppCreateClearRunnable: Runnable? = null
+
+  private val mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 
   @Volatile
   var isSafeModeActive: Boolean = false
@@ -46,35 +55,101 @@ object StartupSafetyNet {
   @Volatile
   internal var simulatedStartupCrashHook: (() -> Unit)? = null
 
+  @Volatile
+  internal var pidProvider: () -> Int = { Process.myPid() }
+
   private data class PersistedState(
-    val inStartup: Boolean = false,
+    val inMainStartup: Boolean = false,
+    val inAppCreate: Boolean = false,
+    val appCreateRunToken: Long = 0L,
     val uncaughtRecordedForRun: Boolean = false,
     val activePid: Int = 0,
     val consecutiveStartupCrashes: Int = 0,
   )
 
   /**
-   * Begins tracking a startup attempt in `Application.onCreate` or `MainActivity.onCreate`.
-   * If a previous process died mid-startup without recording an uncaught crash, counts it here.
+   * Starts brief uncaught-crash tracking in `Application.onCreate` and schedules clearing it
+   * 5 seconds later on the main handler if the process is still alive.
+   *
+   * Background starts (widgets, DreamService, timer/earbud services, broadcasts) that end without
+   * opening `MainActivity` and without an uncaught exception never count as startup crashes.
    */
-  fun beginStartupAttempt(context: Context) {
+  fun beginApplicationStartupAttempt(context: Context) {
     val appCtx = context.applicationContext
-    val pid = Process.myPid()
+    val pid = pidProvider()
     synchronized(lock) {
       val current = readState(appCtx)
       if (current.consecutiveStartupCrashes >= MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY) {
-        // Recovery screen is already required; keep the failure count intact until the user acts.
+        cancelAppCreateClearLocked()
         return
       }
       var crashes = current.consecutiveStartupCrashes
-      if (current.inStartup && !current.uncaughtRecordedForRun && current.activePid != pid) {
+      if (current.inMainStartup && !current.uncaughtRecordedForRun && current.activePid != pid) {
         crashes += 1
       }
+      cancelAppCreateClearLocked()
       if (crashes >= MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY) {
         writeState(
           appCtx,
           PersistedState(
-            inStartup = false,
+            inMainStartup = false,
+            inAppCreate = false,
+            appCreateRunToken = 0L,
+            uncaughtRecordedForRun = false,
+            activePid = pid,
+            consecutiveStartupCrashes = crashes,
+          ),
+        )
+      } else {
+        appCreateTokenCounter += 1L
+        val token = appCreateTokenCounter
+        writeState(
+          appCtx,
+          PersistedState(
+            inMainStartup = false,
+            inAppCreate = true,
+            appCreateRunToken = token,
+            uncaughtRecordedForRun = false,
+            activePid = pid,
+            consecutiveStartupCrashes = crashes,
+          ),
+        )
+        val runnable = Runnable {
+          clearAppCreateTracking(appCtx, pid, token)
+        }
+        pendingAppCreateClearRunnable = runnable
+        runCatching {
+          mainHandler.postDelayed(runnable, APP_CREATE_CLEAR_DELAY_MS)
+        }
+      }
+    }
+  }
+
+  /**
+   * Begins tracking a real startup attempt when opening `MainActivity`.
+   * If a previous process died mid-main-startup without recording an uncaught crash, counts it here.
+   */
+  fun beginStartupAttempt(context: Context) {
+    val appCtx = context.applicationContext
+    val pid = pidProvider()
+    synchronized(lock) {
+      val current = readState(appCtx)
+      if (current.consecutiveStartupCrashes >= MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY) {
+        cancelAppCreateClearLocked()
+        return
+      }
+      var crashes = current.consecutiveStartupCrashes
+      if (current.inMainStartup && !current.uncaughtRecordedForRun && current.activePid != pid) {
+        crashes += 1
+      }
+      cancelAppCreateClearLocked()
+      if (crashes >= MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY) {
+        writeState(
+          appCtx,
+          PersistedState(
+            inMainStartup = false,
+            inAppCreate = false,
+            appCreateRunToken = 0L,
             uncaughtRecordedForRun = false,
             activePid = pid,
             consecutiveStartupCrashes = crashes,
@@ -84,7 +159,9 @@ object StartupSafetyNet {
         writeState(
           appCtx,
           PersistedState(
-            inStartup = true,
+            inMainStartup = true,
+            inAppCreate = false,
+            appCreateRunToken = 0L,
             uncaughtRecordedForRun = false,
             activePid = pid,
             consecutiveStartupCrashes = crashes,
@@ -92,6 +169,28 @@ object StartupSafetyNet {
         )
       }
     }
+  }
+
+  private fun clearAppCreateTracking(appCtx: Context, pid: Int, token: Long) {
+    synchronized(lock) {
+      val current = readState(appCtx)
+      if (current.inAppCreate && current.activePid == pid && current.appCreateRunToken == token) {
+        writeState(
+          appCtx,
+          current.copy(
+            inAppCreate = false,
+            appCreateRunToken = 0L,
+          ),
+        )
+      }
+      pendingAppCreateClearRunnable = null
+    }
+  }
+
+  private fun cancelAppCreateClearLocked() {
+    val existing = pendingAppCreateClearRunnable ?: return
+    pendingAppCreateClearRunnable = null
+    runCatching { mainHandler.removeCallbacks(existing) }
   }
 
   /** Clears recorded step errors at the beginning of a fresh Application.onCreate run. */
@@ -104,7 +203,7 @@ object StartupSafetyNet {
 
   /**
    * Runs one non-essential startup step in isolation. Never rethrows; records the failed step
-   * and writes a non-fatal diagnostic entry if it fails. Skips execution in Safe Mode.
+   * and writes a non-fatal diagnostic entry to `startup_steps.txt` if it fails. Skips in Safe Mode.
    */
   fun runOptionalStep(context: Context, stepName: String, block: () -> Unit) {
     if (isSafeModeActive) return
@@ -137,11 +236,14 @@ object StartupSafetyNet {
     val appCtx = context.applicationContext
     synchronized(lock) {
       val current = readState(appCtx)
-      if (current.inStartup && !current.uncaughtRecordedForRun) {
+      if ((current.inMainStartup || current.inAppCreate) && !current.uncaughtRecordedForRun) {
+        cancelAppCreateClearLocked()
         writeState(
           appCtx,
           PersistedState(
-            inStartup = false,
+            inMainStartup = false,
+            inAppCreate = false,
+            appCreateRunToken = 0L,
             uncaughtRecordedForRun = true,
             activePid = current.activePid,
             consecutiveStartupCrashes = current.consecutiveStartupCrashes + 1,
@@ -152,10 +254,17 @@ object StartupSafetyNet {
     CrashCatcher.writeCrashLog(appCtx, thread, throwable)
   }
 
-  /** Simulates a startup crash cleanly inside Robolectric tests without terminating the JVM runner. */
+  /** Simulates a real `MainActivity` startup crash cleanly inside Robolectric tests without terminating the JVM runner. */
   fun simulateStartupCrashForTest(context: Context, throwable: Throwable) {
     val appCtx = context.applicationContext
     beginStartupAttempt(appCtx)
+    recordUncaughtCrash(appCtx, Thread.currentThread(), throwable)
+  }
+
+  /** Simulates an uncaught crash during `Application.onCreate` inside Robolectric tests. */
+  internal fun simulateApplicationStartupCrashForTest(context: Context, throwable: Throwable) {
+    val appCtx = context.applicationContext
+    beginApplicationStartupAttempt(appCtx)
     recordUncaughtCrash(appCtx, Thread.currentThread(), throwable)
   }
 
@@ -167,12 +276,15 @@ object StartupSafetyNet {
       if (current.consecutiveStartupCrashes >= MAX_CONSECUTIVE_CRASHES_BEFORE_RECOVERY && !recoveryDismissedForSession) {
         return
       }
+      cancelAppCreateClearLocked()
       writeState(
         appCtx,
         PersistedState(
-          inStartup = false,
+          inMainStartup = false,
+          inAppCreate = false,
+          appCreateRunToken = 0L,
           uncaughtRecordedForRun = false,
-          activePid = Process.myPid(),
+          activePid = pidProvider(),
           consecutiveStartupCrashes = 0,
         ),
       )
@@ -190,27 +302,48 @@ object StartupSafetyNet {
   fun consecutiveStartupCrashCount(context: Context): Int =
     synchronized(lock) { readState(context.applicationContext).consecutiveStartupCrashes }
 
+  internal fun isMainStartupInProgressForTest(context: Context): Boolean =
+    synchronized(lock) { readState(context.applicationContext).inMainStartup }
+
+  internal fun isAppCreateTrackingActiveForTest(context: Context): Boolean =
+    synchronized(lock) { readState(context.applicationContext).inAppCreate }
+
   /** Returns recorded non-fatal startup step failures from this run. */
   fun stepFailures(): List<StartupStepFailure> =
     synchronized(lock) { _stepFailures.toList() }
 
-  /** Builds a combined diagnostic error string for the Startup problem screen, Copy, and Share actions. */
+  /**
+   * Builds a combined diagnostic error string for the Startup problem screen, Copy, and Share actions,
+   * showing both `last_crash.txt` (fatal crash) and `startup_steps.txt` (non-fatal step errors).
+   */
   fun buildErrorReport(context: Context): String {
     val sb = StringBuilder()
+    val crash = CrashCatcher.readLastCrashLog(context)?.trim()
+    val stepLog = CrashCatcher.readStartupStepsLog(context)?.trim()
     val steps = stepFailures()
-    if (steps.isNotEmpty()) {
+
+    if (!crash.isNullOrBlank()) {
+      sb.appendLine("Last crash (last_crash.txt):")
+      sb.appendLine(crash)
+    }
+
+    if (!stepLog.isNullOrBlank()) {
+      if (sb.isNotEmpty()) sb.appendLine()
+      sb.appendLine("Non-fatal startup & step errors (startup_steps.txt):")
+      sb.appendLine(stepLog)
+    } else if (steps.isNotEmpty()) {
+      if (sb.isNotEmpty()) sb.appendLine()
       sb.appendLine("Failed optional startup steps:")
       steps.forEach { step ->
         sb.appendLine("• ${step.stepName}: ${step.summary}")
       }
-      sb.appendLine()
+      if (crash.isNullOrBlank()) {
+        sb.appendLine()
+        sb.appendLine(steps.first().stackTrace)
+      }
     }
-    val crash = CrashCatcher.readLastCrashLog(context)
-    if (!crash.isNullOrBlank()) {
-      sb.append(crash)
-    } else if (steps.isNotEmpty()) {
-      sb.append(steps.first().stackTrace)
-    } else {
+
+    if (sb.isEmpty()) {
       sb.append("AuraClock crashed during its last two startups, but no stack trace was captured.")
     }
     return sb.toString().trim()
@@ -233,14 +366,17 @@ object StartupSafetyNet {
   fun enterSafeMode(context: Context) {
     val appCtx = context.applicationContext
     synchronized(lock) {
+      cancelAppCreateClearLocked()
       isSafeModeActive = true
       recoveryDismissedForSession = true
       writeState(
         appCtx,
         PersistedState(
-          inStartup = false,
+          inMainStartup = false,
+          inAppCreate = false,
+          appCreateRunToken = 0L,
           uncaughtRecordedForRun = false,
-          activePid = Process.myPid(),
+          activePid = pidProvider(),
           consecutiveStartupCrashes = 0,
         ),
       )
@@ -249,7 +385,7 @@ object StartupSafetyNet {
 
   /**
    * Last-resort reset: deletes imported WFF packages (`files/wff/`), clears all user preferences,
-   * clears Safe Mode and consecutive crash markers, and allows the clean app to start.
+   * clears Safe Mode, consecutive crash markers, and startup step logs, and allows the clean app to start.
    */
   fun clearImportedFacesAndSettings(context: Context) {
     val appCtx = context.applicationContext
@@ -257,7 +393,9 @@ object StartupSafetyNet {
       File(appCtx.filesDir, "wff").deleteRecursively()
     }
     CoreSingletons.clearPreferences(appCtx)
+    CrashCatcher.clearStartupStepsLog(appCtx)
     synchronized(lock) {
+      cancelAppCreateClearLocked()
       isSafeModeActive = false
       recoveryDismissedForSession = true
       _stepFailures.clear()
@@ -269,13 +407,17 @@ object StartupSafetyNet {
   internal fun resetAllForTest(context: Context) {
     val appCtx = context.applicationContext
     synchronized(lock) {
+      cancelAppCreateClearLocked()
       isSafeModeActive = false
       recoveryDismissedForSession = false
       simulatedStepFailureHook = null
       simulatedStartupCrashHook = null
+      pidProvider = { Process.myPid() }
+      appCreateTokenCounter = 0L
       _stepFailures.clear()
       stateFile(appCtx).delete()
     }
+    CrashCatcher.clearStartupStepsLog(appCtx)
   }
 
   /**
@@ -301,7 +443,9 @@ object StartupSafetyNet {
     return runCatching {
       val obj = JSONObject(f.readText(StandardCharsets.UTF_8))
       PersistedState(
-        inStartup = obj.optBoolean("inStartup", false),
+        inMainStartup = obj.optBoolean("inMainStartup", false),
+        inAppCreate = obj.optBoolean("inAppCreate", false),
+        appCreateRunToken = obj.optLong("appCreateRunToken", 0L),
         uncaughtRecordedForRun = obj.optBoolean("uncaughtRecordedForRun", false),
         activePid = obj.optInt("activePid", 0),
         consecutiveStartupCrashes = obj.optInt("consecutiveStartupCrashes", 0),
@@ -314,7 +458,9 @@ object StartupSafetyNet {
       val f = stateFile(appCtx)
       f.parentFile?.mkdirs()
       val payload = JSONObject().apply {
-        put("inStartup", state.inStartup)
+        put("inMainStartup", state.inMainStartup)
+        put("inAppCreate", state.inAppCreate)
+        put("appCreateRunToken", state.appCreateRunToken)
         put("uncaughtRecordedForRun", state.uncaughtRecordedForRun)
         put("activePid", state.activePid)
         put("consecutiveStartupCrashes", state.consecutiveStartupCrashes)
