@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -38,6 +40,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import com.example.R
+import com.example.core.CoreSingletons
+import com.example.core.CustomFontStorage
 import com.example.core.FaceData
 import com.example.core.FaceRenderMode
 import com.example.core.FaceTimeData
@@ -91,7 +95,7 @@ internal object FaceEngine {
         .distinct()
     }
 
-    val typefaces = rememberTypefaces(context)
+    val typefaces = rememberTypefaces(context, definition)
     val textPaint = remember { Paint().apply { isAntiAlias = true } }
 
     BoxWithConstraints(
@@ -168,7 +172,7 @@ internal object FaceEngine {
       }
     }
 
-    val typefaces = rememberTypefaces(context)
+    val typefaces = rememberTypefaces(context, definition)
     val textPaint = remember { Paint().apply { isAntiAlias = true } }
     Canvas(modifier = modifier) {
       drawFaceLayers(
@@ -421,6 +425,7 @@ internal object FaceEngine {
       weight = layer.weight,
       align = layer.align,
       font = layer.font,
+      customFontRef = layer.customFontRef,
       letterSpacing = layer.letterSpacing,
       typefaces = typefaces,
       textPaint = textPaint,
@@ -448,6 +453,7 @@ internal object FaceEngine {
       weight = layer.weight,
       align = layer.align,
       font = layer.font,
+      customFontRef = layer.customFontRef,
       letterSpacing = layer.letterSpacing,
       typefaces = typefaces,
       textPaint = textPaint,
@@ -554,6 +560,7 @@ internal object FaceEngine {
     weight: TextWeight,
     align: TextAlign,
     font: TextFont,
+    customFontRef: String?,
     letterSpacing: Float,
     typefaces: ResolvedTypefaces,
     textPaint: Paint,
@@ -566,7 +573,7 @@ internal object FaceEngine {
       TextAlign.CENTER -> Paint.Align.CENTER
       TextAlign.RIGHT -> Paint.Align.RIGHT
     }
-    textPaint.typeface = typefaces.resolve(font, weight)
+    textPaint.typeface = typefaces.resolve(font, weight, customFontRef)
     val fm = textPaint.fontMetrics
     val baselineY = anchorY - (fm.ascent + fm.descent) / 2f
     drawContext.canvas.nativeCanvas.drawText(text, anchorX, baselineY, textPaint)
@@ -585,9 +592,21 @@ internal object FaceEngine {
     val sansBold: Typeface,
     val monoNormal: Typeface,
     val monoBold: Typeface,
+    val faceOverrideNormal: Typeface? = null,
+    val faceOverrideBold: Typeface? = null,
+    val layerCustomTypefaces: Map<String, Pair<Typeface, Typeface>> = emptyMap(),
   ) {
-    fun resolve(font: TextFont, weight: TextWeight): Typeface {
+    fun resolve(font: TextFont, weight: TextWeight, customFontRef: String? = null): Typeface {
       val bold = weight == TextWeight.BOLD
+      if (faceOverrideNormal != null && faceOverrideBold != null) {
+        return if (bold) faceOverrideBold else faceOverrideNormal
+      }
+      if (customFontRef != null) {
+        layerCustomTypefaces[customFontRef]?.let { (normal, boldTf) ->
+          return if (bold) boldTf else normal
+        }
+        return if (bold) defaultBold else defaultNormal
+      }
       return when (font) {
         TextFont.DEFAULT -> if (bold) defaultBold else defaultNormal
         TextFont.SANS -> if (bold) sansBold else sansNormal
@@ -597,19 +616,44 @@ internal object FaceEngine {
   }
 
   @Composable
-  private fun rememberTypefaces(context: Context): ResolvedTypefaces = remember(context) {
-    val sansBase = runCatching { ResourcesCompat.getFont(context, R.font.space_grotesk) }.getOrNull()
-      ?: Typeface.SANS_SERIF
-    val monoBase = runCatching { ResourcesCompat.getFont(context, R.font.jetbrains_mono) }.getOrNull()
-      ?: Typeface.MONOSPACE
-    ResolvedTypefaces(
-      defaultNormal = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL),
-      defaultBold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
-      sansNormal = Typeface.create(sansBase, Typeface.NORMAL),
-      sansBold = Typeface.create(sansBase, Typeface.BOLD),
-      monoNormal = Typeface.create(monoBase, Typeface.NORMAL),
-      monoBold = Typeface.create(monoBase, Typeface.BOLD),
-    )
+  private fun rememberTypefaces(context: Context, definition: FaceDefinition): ResolvedTypefaces {
+    val prefs = remember(context) { CoreSingletons.prefs(context) }
+    val faceFonts by prefs.faceDigitalFonts.collectAsStateWithLifecycle()
+    val importedFonts by CustomFontStorage.fontsFlow.collectAsStateWithLifecycle()
+    val overrideFontId = faceFonts[definition.id]
+
+    return remember(context, definition.id, overrideFontId, importedFonts) {
+      val sansBase = runCatching { ResourcesCompat.getFont(context, R.font.space_grotesk) }.getOrNull()
+        ?: Typeface.SANS_SERIF
+      val monoBase = runCatching { ResourcesCompat.getFont(context, R.font.jetbrains_mono) }.getOrNull()
+        ?: Typeface.MONOSPACE
+
+      val overrideTf = CustomFontStorage.resolveTypeface(context, overrideFontId)
+      val layerCustomMap = buildMap<String, Pair<Typeface, Typeface>> {
+        for (layer in definition.layers) {
+          val ref = when (layer) {
+            is TextLayer -> layer.customFontRef
+            is SlotLayer -> layer.customFontRef
+            else -> null
+          } ?: continue
+          val fontId = ref.removePrefix("user:")
+          val tf = CustomFontStorage.resolveTypeface(context, fontId) ?: continue
+          put(ref, Typeface.create(tf, Typeface.NORMAL) to Typeface.create(tf, Typeface.BOLD))
+        }
+      }
+
+      ResolvedTypefaces(
+        defaultNormal = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL),
+        defaultBold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
+        sansNormal = Typeface.create(sansBase, Typeface.NORMAL),
+        sansBold = Typeface.create(sansBase, Typeface.BOLD),
+        monoNormal = Typeface.create(monoBase, Typeface.NORMAL),
+        monoBold = Typeface.create(monoBase, Typeface.BOLD),
+        faceOverrideNormal = overrideTf?.let { Typeface.create(it, Typeface.NORMAL) },
+        faceOverrideBold = overrideTf?.let { Typeface.create(it, Typeface.BOLD) },
+        layerCustomTypefaces = layerCustomMap,
+      )
+    }
   }
 
   /**

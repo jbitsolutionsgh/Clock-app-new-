@@ -20,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Share
@@ -33,12 +35,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -133,7 +139,9 @@ object EarbudChiplet {
 
   /** Starts the 6-second hardware press recorder in Settings. */
   internal fun startLearnMode(context: Context) {
-    learnController.start(context.applicationContext, router(context))
+    val appCtx = context.applicationContext
+    learnController.start(appCtx, router(appCtx))
+    notifyOtherAudioPolicyChanged(appCtx)
   }
 
   /** Finishes Learn Mode early with presses captured so far. */
@@ -168,6 +176,22 @@ object EarbudChiplet {
       reprimeCount = _diagnostics.value.reprimeCount + 1,
       lastReprimeTimeLabel = timeLabel,
     )
+  }
+
+  internal fun updateSessionPlaybackState(stateLabel: String) {
+    _diagnostics.value = _diagnostics.value.copy(sessionPlaybackStateLabel = stateLabel)
+  }
+
+  internal fun recordSessionStateFlip(stateLabel: String, timeLabel: String) {
+    _diagnostics.value = _diagnostics.value.copy(
+      sessionPlaybackStateLabel = stateLabel,
+      lastStateFlipTimeLabel = timeLabel,
+      stateFlipCount = _diagnostics.value.stateFlipCount + 1,
+    )
+  }
+
+  internal fun resetDiagnosticsForTest() {
+    _diagnostics.value = EarbudDiagnostics()
   }
 
   /** Notifies the running service to re-check active playback if the user switched back to AuraClock actions. */
@@ -378,6 +402,24 @@ object EarbudChiplet {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("diag_last_reprime_time"),
           )
+          Text(
+            text = "MediaSession state: ${diag.sessionPlaybackStateLabel}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (diag.sessionPlaybackStateLabel == "STATE_PLAYING") Color(0xFF10B981) else Color.White,
+            modifier = Modifier.testTag("diag_session_playback_state"),
+          )
+          Text(
+            text = "State flips: ${diag.stateFlipCount}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier.testTag("diag_state_flip_count"),
+          )
+          Text(
+            text = "Last state flip: ${diag.lastStateFlipTimeLabel}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("diag_last_state_flip_time"),
+          )
         }
       }
 
@@ -417,6 +459,111 @@ object EarbudChiplet {
                   style = MaterialTheme.typography.bodyMedium,
                   color = Color.White,
                 )
+              }
+            }
+          }
+        }
+      }
+
+      val keyLogEntries by RawKeyLog.entries.collectAsStateWithLifecycle()
+      val clipboardManager = LocalClipboardManager.current
+      var keyLogCopied by remember { mutableStateOf(false) }
+
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+          .testTag("diag_raw_key_log_card"),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "Raw Key Log (Last ${RawKeyLog.MAX_ENTRIES})",
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+              text = "${keyLogEntries.size}/${RawKeyLog.MAX_ENTRIES}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.testTag("diag_raw_key_log_count"),
+            )
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            OutlinedButton(
+              onClick = {
+                clipboardManager.setText(AnnotatedString(RawKeyLog.formatAllForCopy()))
+                keyLogCopied = true
+              },
+              enabled = keyLogEntries.isNotEmpty(),
+              modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .testTag("diag_key_log_copy_button"),
+            ) {
+              Icon(Icons.Default.ContentCopy, contentDescription = null)
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(if (keyLogCopied) "Copied" else "Copy log")
+            }
+            OutlinedButton(
+              onClick = {
+                RawKeyLog.clear()
+                keyLogCopied = false
+              },
+              enabled = keyLogEntries.isNotEmpty(),
+              modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .testTag("diag_key_log_clear_button"),
+            ) {
+              Icon(Icons.Default.DeleteSweep, contentDescription = null)
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Clear log")
+            }
+          }
+          if (keyLogEntries.isEmpty()) {
+            Text(
+              text = "No button events recorded yet in memory.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("diag_raw_key_log_list"),
+            )
+          } else {
+            Column(
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+              modifier = Modifier.testTag("diag_raw_key_log_list"),
+            ) {
+              keyLogEntries.forEach { entry ->
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                  Text(
+                    text = "${entry.timestampLabel} • ${entry.directionLabel} • ${entry.keyName} (${entry.keyCode})",
+                    fontFamily = JetBrainsMonoFamily,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                  )
+                  Text(
+                    text = "${entry.route} → ${entry.outcome}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                }
               }
             }
           }

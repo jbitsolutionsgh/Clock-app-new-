@@ -26,6 +26,7 @@ internal object PlaybackReprimeLogic {
   const val DEBOUNCE_MS = 400L
   const val SELF_AUDIO_IGNORE_WINDOW_MS = 1_000L
   const val RATE_LIMIT_MS = 3_000L
+  const val HOLD_PLAYING_DURATION_MS = 1_500L
 
   /**
    * Returns true if [nowMs] falls inside the 1-second ignore window following
@@ -40,6 +41,25 @@ internal object PlaybackReprimeLogic {
     if (lastSelfAudioMs < 0L) return false
     val elapsed = nowMs - lastSelfAudioMs
     return elapsed in 0L until SELF_AUDIO_IGNORE_WINDOW_MS
+  }
+
+  /**
+   * Pure decision function determining whether AuraClock should temporarily flip its
+   * MediaSession playback state to STATE_PLAYING to claim Bluetooth media button routing.
+   * Rejects flips when take-over is disabled, while TTS is speaking, inside the 1-second
+   * self-audio ignore window, or when there is no active external audio/post-passthrough trigger.
+   */
+  fun shouldFlipPlaybackState(
+    nowMs: Long,
+    takeOverEnabled: Boolean,
+    lastSelfAudioMs: Long,
+    isCurrentlySpeaking: Boolean = false,
+    hasRelevantTrigger: Boolean = true,
+  ): Boolean {
+    if (!hasRelevantTrigger) return false
+    if (!takeOverEnabled) return false
+    if (isWithinSelfAudioIgnoreWindow(nowMs, lastSelfAudioMs, isCurrentlySpeaking)) return false
+    return true
   }
 
   /**
@@ -94,8 +114,16 @@ internal object PlaybackReprimeLogic {
     lastReprimeMs: Long,
     isCurrentlySpeaking: Boolean = false,
   ): Boolean {
-    if (!takeOverEnabled) return false
-    if (isWithinSelfAudioIgnoreWindow(nowMs, lastSelfAudioMs, isCurrentlySpeaking)) return false
+    if (!shouldFlipPlaybackState(
+        nowMs = nowMs,
+        takeOverEnabled = takeOverEnabled,
+        lastSelfAudioMs = lastSelfAudioMs,
+        isCurrentlySpeaking = isCurrentlySpeaking,
+        hasRelevantTrigger = true,
+      )
+    ) {
+      return false
+    }
     if (lastReprimeMs >= 0L && (nowMs - lastReprimeMs) < RATE_LIMIT_MS) return false
     return true
   }

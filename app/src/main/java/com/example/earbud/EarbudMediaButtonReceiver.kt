@@ -16,7 +16,7 @@ class EarbudMediaButtonReceiver : BroadcastReceiver() {
     if (!CoreSingletons.prefs(context).earbudEnabled.value) return
     val event = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
       ?: return
-    if (EarbudChiplet.router(context).handleKeyEvent(event) && isOrderedBroadcast) {
+    if (EarbudChiplet.router(context).handleKeyEvent(event, route = KeyArrivalRoute.MEDIA_BUTTON_RECEIVER.label) && isOrderedBroadcast) {
       abortBroadcast()
     }
   }

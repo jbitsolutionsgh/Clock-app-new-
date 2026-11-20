@@ -296,7 +296,7 @@ internal object FaceDefinitionParser {
       ?: return LayerResult.Fail("Text layer '$id' invalid weight")
     val align = parseAlign(obj.optString("align", "center"))
       ?: return LayerResult.Fail("Text layer '$id' invalid align")
-    val font = parseFont(obj.optString("font", "default"))
+    val (font, customFontRef) = parseFont(obj.optString("font", "default"))
       ?: return LayerResult.Fail("Text layer '$id' invalid font")
     return LayerResult.Ok(
       TextLayer(
@@ -313,6 +313,7 @@ internal object FaceDefinitionParser {
         color = color,
         letterSpacing = obj.optDouble("letterSpacing", 0.0).toFloat(),
         font = font,
+        customFontRef = customFontRef,
       ),
     )
   }
@@ -392,7 +393,7 @@ internal object FaceDefinitionParser {
       ?: return LayerResult.Fail("Slot layer '$id' invalid weight")
     val align = parseAlign(obj.optString("align", "center"))
       ?: return LayerResult.Fail("Slot layer '$id' invalid align")
-    val font = parseFont(obj.optString("font", "mono"))
+    val (font, customFontRef) = parseFont(obj.optString("font", "mono"))
       ?: return LayerResult.Fail("Slot layer '$id' invalid font")
 
     return LayerResult.Ok(
@@ -415,6 +416,7 @@ internal object FaceDefinitionParser {
         weight = weight,
         align = align,
         font = font,
+        customFontRef = customFontRef,
         letterSpacing = obj.optDouble("letterSpacing", 0.0).toFloat(),
       ),
     )
@@ -473,11 +475,20 @@ internal object FaceDefinitionParser {
     else -> null
   }
 
-  private fun parseFont(raw: String): TextFont? = when (raw.trim().lowercase()) {
-    "default" -> TextFont.DEFAULT
-    "sans", "space_grotesk" -> TextFont.SANS
-    "mono", "jetbrains_mono" -> TextFont.MONO
-    else -> null
+  private fun parseFont(raw: String): Pair<TextFont, String?>? {
+    val trimmed = raw.trim()
+    val lower = trimmed.lowercase()
+    return when {
+      lower == "default" -> TextFont.DEFAULT to null
+      lower == "sans" || lower == "space_grotesk" -> TextFont.SANS to null
+      lower == "mono" || lower == "jetbrains_mono" -> TextFont.MONO to null
+      lower.startsWith("user:") -> {
+        val refId = trimmed.substring(5).trim()
+        if (refId.isEmpty() || refId.contains("..") || refId.contains('/')) null
+        else TextFont.DEFAULT to "user:$refId"
+      }
+      else -> null
+    }
   }
 
   private fun JSONObject.optNullableString(key: String): String? {

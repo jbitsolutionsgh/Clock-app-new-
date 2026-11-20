@@ -178,6 +178,7 @@ internal data class TextLayer(
   val color: ColorSpec,
   val letterSpacing: Float = 0f,
   val font: TextFont = TextFont.DEFAULT,
+  val customFontRef: String? = null,
 ) : FaceLayer
 
 internal data class GaugeLayer(
@@ -216,6 +217,7 @@ internal data class SlotLayer(
   val weight: TextWeight = TextWeight.BOLD,
   val align: TextAlign = TextAlign.CENTER,
   val font: TextFont = TextFont.MONO,
+  val customFontRef: String? = null,
   val letterSpacing: Float = 0f,
 ) : FaceLayer
 

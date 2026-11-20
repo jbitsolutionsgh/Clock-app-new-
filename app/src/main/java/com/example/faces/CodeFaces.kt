@@ -17,15 +17,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.core.AuraThemeColor
+import com.example.core.CoreSingletons
+import com.example.core.CustomFontStorage
 import com.example.core.FaceRenderMode
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.OledBlack
@@ -49,6 +56,17 @@ internal class StandByDigitalFace : WatchFace {
     modifier: Modifier,
     renderMode: FaceRenderMode,
   ) {
+    val context = LocalContext.current
+    val prefs = remember(context) { CoreSingletons.prefs(context) }
+    val faceFonts by prefs.faceDigitalFonts.collectAsStateWithLifecycle()
+    val importedFonts by CustomFontStorage.fontsFlow.collectAsStateWithLifecycle()
+    val customFamily = remember(faceFonts[id], importedFonts) {
+      val tf = CustomFontStorage.resolveTypeface(context, faceFonts[id])
+      tf?.let { FontFamily(it) }
+    }
+    val headerFont = customFamily ?: SpaceGroteskFamily
+    val numericFont = customFamily ?: JetBrainsMonoFamily
+
     val t = timeProvider()
     val displayHour = when {
       t.hour12 == 0 -> 12
@@ -71,7 +89,7 @@ internal class StandByDigitalFace : WatchFace {
       ) {
         Text(
           text = t.monthDayLabel,
-          fontFamily = SpaceGroteskFamily,
+          fontFamily = headerFont,
           fontWeight = FontWeight.Bold,
           fontSize = 18.sp,
           letterSpacing = 2.sp,
@@ -80,7 +98,7 @@ internal class StandByDigitalFace : WatchFace {
         Spacer(modifier = Modifier.height(6.dp))
         Text(
           text = timeText,
-          fontFamily = JetBrainsMonoFamily,
+          fontFamily = numericFont,
           fontWeight = FontWeight.Bold,
           fontSize = numeralSize,
           lineHeight = numeralSize,
@@ -97,7 +115,7 @@ internal class StandByDigitalFace : WatchFace {
           ) {
             Text(
               text = "%02d s".format(t.second),
-              fontFamily = JetBrainsMonoFamily,
+              fontFamily = numericFont,
               fontWeight = FontWeight.Bold,
               fontSize = 16.sp,
               color = accent.primary,
@@ -107,7 +125,7 @@ internal class StandByDigitalFace : WatchFace {
           Spacer(modifier = Modifier.width(10.dp))
           Text(
             text = if (t.isAm) "AM" else "PM",
-            fontFamily = SpaceGroteskFamily,
+            fontFamily = headerFont,
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp,
             color = Color(0xFF94A3B8),

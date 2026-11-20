@@ -107,6 +107,7 @@ object FacesChiplet {
     val accent by prefs.themeColor.collectAsStateWithLifecycle()
     val faces by WatchFaceRegistry.facesFlow.collectAsStateWithLifecycle()
     val activeFace = remember(selectedId, faces) { WatchFaceRegistry.findById(selectedId) }
+    val activeSmooth = (activeFace as? ImageDialFace)?.photoConfig?.smoothSeconds ?: true
     val activeWffEntry = (activeFace as? com.example.faces.wff.WffFace)?.storedFace
       ?.takeIf { com.example.faces.wff.WffFace.hasCustomizableOptions(it.face) }
     var showConfigSheet by remember { mutableStateOf(false) }
@@ -128,7 +129,7 @@ object FacesChiplet {
           ClockFaceStage(
             face = activeFace,
             accent = accent,
-            smoothSweep = true,
+            smoothSweep = activeSmooth,
             modifier = Modifier
               .weight(1f)
               .fillMaxHeight(),
@@ -154,7 +155,7 @@ object FacesChiplet {
           ClockFaceStage(
             face = activeFace,
             accent = accent,
-            smoothSweep = true,
+            smoothSweep = activeSmooth,
             modifier = Modifier
               .weight(1f)
               .fillMaxWidth(),

@@ -428,6 +428,9 @@ class AuraPrefs(context: Context) {
   private val _wffFacePhotos = MutableStateFlow(loadAllWffPhotos())
   val wffFacePhotos: StateFlow<Map<String, Map<String, List<String>>>> = _wffFacePhotos.asStateFlow()
 
+  private val _faceDigitalFonts = MutableStateFlow(loadPrefixedOnePartMap(KEY_FACE_FONT_PREFIX))
+  val faceDigitalFonts: StateFlow<Map<String, String>> = _faceDigitalFonts.asStateFlow()
+
   private fun loadAllWffConfigs(): Map<String, Map<String, String>> =
     loadPrefixedTwoPartMap(KEY_WFF_CONFIG_PREFIX)
 
@@ -541,6 +544,39 @@ class AuraPrefs(context: Context) {
     }
   }
 
+  /** Returns the selected imported custom font ID for [faceId], or null when Default is used. */
+  fun getFaceDigitalFontId(faceId: String): String? =
+    _faceDigitalFonts.value[faceId]?.takeIf { it.isNotBlank() && it != FONT_DEFAULT_ID }
+
+  /** Sets or clears (via null/"default") the imported digital font ID for [faceId]. */
+  fun setFaceDigitalFontId(faceId: String, fontId: String?) {
+    val normalized = fontId?.trim()?.takeIf { it.isNotEmpty() && it != FONT_DEFAULT_ID }
+    val key = "$KEY_FACE_FONT_PREFIX$faceId"
+    val updated = _faceDigitalFonts.value.toMutableMap()
+    if (normalized == null) {
+      prefs.edit().remove(key).apply()
+      updated.remove(faceId)
+    } else {
+      prefs.edit().putString(key, normalized).apply()
+      updated[faceId] = normalized
+    }
+    _faceDigitalFonts.value = updated
+  }
+
+  /** Removes any saved per-face references to a deleted custom font [fontId]. */
+  fun clearFontReferences(fontId: String) {
+    val matchingFaces = _faceDigitalFonts.value.filterValues { it == fontId }.keys.toList()
+    if (matchingFaces.isEmpty()) return
+    val editor = prefs.edit()
+    val updated = _faceDigitalFonts.value.toMutableMap()
+    matchingFaces.forEach { faceId ->
+      editor.remove("$KEY_FACE_FONT_PREFIX$faceId")
+      updated.remove(faceId)
+    }
+    editor.apply()
+    _faceDigitalFonts.value = updated
+  }
+
   /** Saves widget configuration for a specific appWidgetId. */
   fun saveWidgetConfig(widgetId: Int, styleId: String, colorId: String) {
     prefs.edit()
@@ -604,6 +640,7 @@ class AuraPrefs(context: Context) {
     _wffComplicationProviders.value = emptyMap()
     _wffSelectedFlavors.value = emptyMap()
     _wffFacePhotos.value = emptyMap()
+    _faceDigitalFonts.value = emptyMap()
   }
 
   companion object {
@@ -657,5 +694,7 @@ class AuraPrefs(context: Context) {
     private const val KEY_STEP_BASELINE_DAY = "step_baseline_day"
     private const val KEY_STEP_BASELINE_VAL = "step_baseline_val"
     private const val KEY_STEP_LAST_DAILY = "step_last_daily"
+    private const val KEY_FACE_FONT_PREFIX = "face_font_"
+    const val FONT_DEFAULT_ID = "default"
   }
 }

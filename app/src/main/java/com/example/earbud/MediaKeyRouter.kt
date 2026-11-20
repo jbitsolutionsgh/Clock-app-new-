@@ -71,49 +71,138 @@ internal class MediaKeyRouter(
   }
 
   /** Handles a raw Android media KeyEvent, returning true if consumed. */
-  fun handleKeyEvent(event: KeyEvent): Boolean {
+  fun handleKeyEvent(
+    event: KeyEvent,
+    route: String = KeyArrivalRoute.DIRECT.label,
+  ): Boolean {
     val nowElapsed = clockMs()
+    val isDown = event.action != KeyEvent.ACTION_UP
     if (isSelfSentForwarding(event.keyCode, nowElapsed)) {
+      RawKeyLog.record(
+        keyCode = event.keyCode,
+        isDown = isDown,
+        route = route,
+        outcome = "Ignored as its own key",
+      )
       // Return false so EarbudMediaButtonReceiver never abortBroadcast()s AuraClock's own forwarded key.
       return false
     }
 
     val learn = learnCaptureListener
     if (learn != null) {
-      if (!isMediaCandidateKey(event.keyCode)) return false
+      if (!isMediaCandidateKey(event.keyCode)) {
+        RawKeyLog.record(
+          keyCode = event.keyCode,
+          isDown = isDown,
+          route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+          outcome = "Ignored as unsupported",
+        )
+        return false
+      }
       if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+        RawKeyLog.record(
+          keyCode = event.keyCode,
+          isDown = true,
+          route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+          outcome = "Ran action: Captured in Learn mode",
+        )
         learn(event.keyCode, nowElapsed)
+      } else {
+        RawKeyLog.record(
+          keyCode = event.keyCode,
+          isDown = isDown,
+          route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+          outcome = if (!isDown) "Ignored UP (Learn mode acts on DOWN)" else "Ignored key repeat",
+        )
       }
       return true
     }
 
-    if (!isSupportedKey(event.keyCode)) return false
+    if (!isSupportedKey(event.keyCode)) {
+      RawKeyLog.record(
+        keyCode = event.keyCode,
+        isDown = isDown,
+        route = route,
+        outcome = "Ignored as unsupported",
+      )
+      return false
+    }
     if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) {
+      RawKeyLog.record(
+        keyCode = event.keyCode,
+        isDown = isDown,
+        route = route,
+        outcome = if (!isDown) "Ignored UP (handled on DOWN)" else "Ignored key repeat",
+      )
       return true
     }
-    return routeKeyCode(event.keyCode, allowDedup = false)
+    return routeKeyCode(event.keyCode, allowDedup = false, route = route)
   }
 
   /** Routes a media key code directly (from KeyEvent or MediaSession transport fallback). */
-  fun routeKeyCode(keyCode: Int, allowDedup: Boolean = false): Boolean {
+  fun routeKeyCode(
+    keyCode: Int,
+    allowDedup: Boolean = false,
+    route: String = KeyArrivalRoute.DIRECT.label,
+  ): Boolean {
     val nowElapsed = clockMs()
     if (isSelfSentForwarding(keyCode, nowElapsed)) {
+      RawKeyLog.record(
+        keyCode = keyCode,
+        isDown = true,
+        route = route,
+        outcome = "Ignored as its own key",
+      )
       return false
     }
 
     val learn = learnCaptureListener
     if (learn != null) {
-      if (!isMediaCandidateKey(keyCode)) return false
+      if (!isMediaCandidateKey(keyCode)) {
+        RawKeyLog.record(
+          keyCode = keyCode,
+          isDown = true,
+          route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+          outcome = "Ignored as unsupported",
+        )
+        return false
+      }
       if (allowDedup && lastTransportCallbackMs >= 0L && nowElapsed - lastTransportCallbackMs in 0L..119L) {
+        RawKeyLog.record(
+          keyCode = keyCode,
+          isDown = true,
+          route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+          outcome = "Ignored duplicate transport event",
+        )
         return true
       }
       lastTransportCallbackMs = nowElapsed
+      RawKeyLog.record(
+        keyCode = keyCode,
+        isDown = true,
+        route = "${KeyArrivalRoute.LEARN_MODE.label} ($route)",
+        outcome = "Ran action: Captured in Learn mode",
+      )
       learn(keyCode, nowElapsed)
       return true
     }
 
-    if (!isSupportedKey(keyCode)) return false
+    if (!isSupportedKey(keyCode)) {
+      RawKeyLog.record(
+        keyCode = keyCode,
+        isDown = true,
+        route = route,
+        outcome = "Ignored as unsupported",
+      )
+      return false
+    }
     if (allowDedup && lastTransportCallbackMs >= 0L && nowElapsed - lastTransportCallbackMs in 0L..119L) {
+      RawKeyLog.record(
+        keyCode = keyCode,
+        isDown = true,
+        route = route,
+        outcome = "Ignored duplicate transport event",
+      )
       return true
     }
     lastTransportCallbackMs = nowElapsed
@@ -125,7 +214,16 @@ internal class MediaKeyRouter(
     pendingTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
     pendingTimeoutRunnable = null
 
-    step.emitted.forEach { dispatchDetected(it) }
+    if (step.emitted.isNotEmpty()) {
+      step.emitted.forEach { dispatchDetected(it, route) }
+    } else {
+      RawKeyLog.record(
+        keyCode = keyCode,
+        isDown = true,
+        route = route,
+        outcome = "Waiting for multi-press window (${config.windowMs} ms)",
+      )
+    }
 
     val deadline = step.flushDeadlineMs
     if (deadline != null && !detectorState.isEmpty) {
@@ -134,7 +232,7 @@ internal class MediaKeyRouter(
         pendingTimeoutRunnable = null
         val flushStep = PressPatternDetector.onTimeout(detectorState, clockMs(), currentDetectorConfig())
         detectorState = flushStep.nextState
-        flushStep.emitted.forEach { dispatchDetected(it) }
+        flushStep.emitted.forEach { dispatchDetected(it, route) }
       }
       pendingTimeoutRunnable = runnable
       mainHandler.postDelayed(runnable, delay)
@@ -166,7 +264,7 @@ internal class MediaKeyRouter(
     )
   }
 
-  private fun dispatchDetected(detected: DetectedPress) {
+  private fun dispatchDetected(detected: DetectedPress, route: String) {
     val keyLabel = "${PressPatternDetector.androidKeyName(detected.forwardKeyCode)} (${detected.forwardKeyCode})"
     val timeLabel = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
     val patternLabel = if (detected.matchedLearnedPattern != null && detected.keyGroup != PressKeyGroup.PLAY_PAUSE_FAMILY) {
@@ -193,9 +291,21 @@ internal class MediaKeyRouter(
       } else {
         "${action.label} (Forward failed)"
       }
+      RawKeyLog.record(
+        keyCode = detected.forwardKeyCode,
+        isDown = true,
+        route = route,
+        outcome = if (forwarded) "Forwarded to the music app (${detected.kind.displayLabel})" else "Forward to music app failed",
+      )
       onKeyDiagnostics(keyLabel, timeLabel, diagAction)
       onPatternDiagnostics(patternLabel, keyLabel, timeLabel, diagAction)
     } else {
+      RawKeyLog.record(
+        keyCode = detected.forwardKeyCode,
+        isDown = true,
+        route = route,
+        outcome = "Ran action: ${action.label} (${detected.kind.displayLabel})",
+      )
       onKeyDiagnostics(keyLabel, timeLabel, action.label)
       onPatternDiagnostics(patternLabel, keyLabel, timeLabel, action.label)
       action.execute(appContext)

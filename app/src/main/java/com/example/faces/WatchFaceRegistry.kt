@@ -296,29 +296,33 @@ internal object WatchFaceRegistry {
   private val _wffFaces = MutableStateFlow<List<WffStoredFace>>(emptyList())
   val wffFacesFlow: StateFlow<List<WffStoredFace>> = _wffFaces.asStateFlow()
 
-  private val _facesFlow = MutableStateFlow(buildFaceList(emptyList()))
+  private val _photoFaces = MutableStateFlow<List<PhotoStoredFace>>(emptyList())
+  val photoFacesFlow: StateFlow<List<PhotoStoredFace>> = _photoFaces.asStateFlow()
+
+  private val _facesFlow = MutableStateFlow(buildFaceList(emptyList(), emptyList()))
   val facesFlow: StateFlow<List<WatchFace>> = _facesFlow.asStateFlow()
 
-  /** Loads JSON definitions and imported WFF packages, refreshing the registered face list. */
+  /** Loads JSON definitions, custom fonts, photo dial faces, and imported WFF packages. */
   fun init(context: Context) {
     val appCtx = context.applicationContext
     FaceAssetRepository.ensureInitialized(appCtx)
+    com.example.core.CustomFontStorage.ensureInitialized(appCtx)
     reloadWff(appCtx)
   }
 
-  /** Reloads imported WFF packages from private storage and syncs Diagnostics + face list. */
+  /** Reloads imported WFF packages and Photo Dial faces from private storage, syncing Diagnostics. */
   fun reloadWff(context: Context) {
     val appCtx = context.applicationContext
     FaceAssetRepository.ensureInitialized(appCtx)
-    val stored = if (com.example.core.StartupSafetyNet.isSafeModeActive) {
-      emptyList()
-    } else {
-      WffStorageManager.loadAll(appCtx)
-    }
-    _wffFaces.value = stored
-    _facesFlow.value = buildFaceList(stored)
+    com.example.core.CustomFontStorage.ensureInitialized(appCtx)
+    val safeMode = com.example.core.StartupSafetyNet.isSafeModeActive
+    val storedWff = if (safeMode) emptyList() else WffStorageManager.loadAll(appCtx)
+    val storedPhoto = if (safeMode) emptyList() else PhotoFaceStorage.loadAll(appCtx)
+    _wffFaces.value = storedWff
+    _photoFaces.value = storedPhoto
+    _facesFlow.value = buildFaceList(storedPhoto, storedWff)
     FaceAssetRepository.updateWffDiagnostics(
-      stored.map { entry ->
+      storedWff.map { entry ->
         val sensorDiag = CoreSingletons.sensorSource(appCtx).diagnostics.value
         val compMap = CoreSingletons.prefs(appCtx).getWffComplicationProviders(entry.id)
         val provenance = com.example.faces.wff.WffExpressionEvaluator.buildDataSourceProvenance(
@@ -339,6 +343,95 @@ internal object WatchFaceRegistry {
         )
       },
     )
+  }
+
+  /** Persists a newly baked Photo Dial face and activates it. */
+  fun savePhotoFace(
+    context: Context,
+    config: PhotoFaceConfig,
+    dialBitmap: android.graphics.Bitmap,
+  ): PhotoStoredFace {
+    val appCtx = context.applicationContext
+    val saved = PhotoFaceStorage.savePhotoFace(appCtx, config, dialBitmap)
+    reloadWff(appCtx)
+    CoreSingletons.prefs(appCtx).setSelectedFaceId(saved.id)
+    return saved
+  }
+
+  /** Updates an existing saved Photo Dial face's hands/date/name settings and reloads registry. */
+  fun updatePhotoFaceConfig(context: Context, config: PhotoFaceConfig): PhotoStoredFace? {
+    val appCtx = context.applicationContext
+    val updated = PhotoFaceStorage.updateConfigOnly(appCtx, config) ?: return null
+    reloadWff(appCtx)
+    return updated
+  }
+
+  /** Deletes a saved Photo Dial face by [id], falling back cleanly if active. */
+  fun deletePhotoFace(context: Context, id: String): Boolean {
+    val appCtx = context.applicationContext
+    val deleted = PhotoFaceStorage.deleteFace(appCtx, id)
+    if (deleted) {
+      val prefs = CoreSingletons.prefs(appCtx)
+      prefs.setFaceDigitalFontId(id, null)
+      reloadWff(appCtx)
+      if (prefs.selectedFaceId.value == id) {
+        faces.firstOrNull()?.let { prefs.setSelectedFaceId(it.id) }
+      }
+    }
+    return deleted
+  }
+
+  /** Sealed result for unified archive import (.apk, WFF .zip, Photo Dial .zip, or watchface.xml). */
+  sealed interface UnifiedImportResult {
+    data class Wff(val result: WffImportResult) : UnifiedImportResult
+    data class PhotoSuccess(val stored: PhotoStoredFace) : UnifiedImportResult
+    data class PhotoError(val reason: String) : UnifiedImportResult
+  }
+
+  /**
+   * Imports either an AuraClock exported Photo Dial `.zip` (`face.json` + dial image) or
+   * a Watch Face Format `.apk`/`.zip`/`watchface.xml` via the single Watch face importer.
+   */
+  fun importAnyArchive(context: Context, uri: android.net.Uri): UnifiedImportResult {
+    val appCtx = context.applicationContext
+    val tempFile = java.io.File.createTempFile("face_peek_", ".tmp", appCtx.cacheDir)
+    try {
+      val copied = appCtx.contentResolver.openInputStream(uri)?.use { input ->
+        var total = 0L
+        val buf = ByteArray(16 * 1024)
+        java.io.FileOutputStream(tempFile).use { out ->
+          while (true) {
+            val read = input.read(buf)
+            if (read <= 0) break
+            total += read
+            if (total > PhotoFaceStorage.MAX_EXPORT_ZIP_BYTES) return UnifiedImportResult.PhotoError("Selected file exceeds the 64 MB size limit.")
+            out.write(buf, 0, read)
+          }
+        }
+        true
+      } ?: false
+
+      if (copied && tempFile.length() >= 4L) {
+        val header = ByteArray(4)
+        tempFile.inputStream().use { it.read(header) }
+        val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
+          (header[2] == 0x03.toByte() || header[2] == 0x05.toByte())
+        if (isZip) {
+          when (val photoRes = PhotoFaceStorage.importFromZipFile(appCtx, tempFile)) {
+            is PhotoZipImportResult.Success -> {
+              reloadWff(appCtx)
+              CoreSingletons.prefs(appCtx).setSelectedFaceId(photoRes.stored.id)
+              return UnifiedImportResult.PhotoSuccess(photoRes.stored)
+            }
+            is PhotoZipImportResult.Error -> return UnifiedImportResult.PhotoError(photoRes.reason)
+            is PhotoZipImportResult.NotAPhotoFaceZip -> Unit
+          }
+        }
+      }
+    } finally {
+      runCatching { tempFile.delete() }
+    }
+    return UnifiedImportResult.Wff(importWff(appCtx, uri))
   }
 
   /** Imports a WFF file or archive and updates the registry when successful. */
@@ -389,8 +482,11 @@ internal object WatchFaceRegistry {
       ?: systemFaces.firstOrNull { it.id == id }
       ?: faces.first()
 
-  private fun buildFaceList(wffStored: List<WffStoredFace>): List<WatchFace> {
-    val result = ArrayList<WatchFace>(16 + wffStored.size)
+  private fun buildFaceList(
+    photoStored: List<PhotoStoredFace>,
+    wffStored: List<WffStoredFace>,
+  ): List<WatchFace> {
+    val result = ArrayList<WatchFace>(16 + photoStored.size + wffStored.size)
     val usedIds = HashSet<String>()
 
     fun addDefinitionOrFallback(id: String, fallback: (() -> WatchFace)? = null) {
@@ -424,6 +520,13 @@ internal object WatchFaceRegistry {
     for (def in FaceAssetRepository.allDefinitions()) {
       if (usedIds.add(def.id)) {
         result += DefinitionFace(def)
+      }
+    }
+
+    // User-created Photo Dial faces.
+    for (photo in photoStored) {
+      if (usedIds.add(photo.id)) {
+        result += ImageDialFace.fromPhotoStored(photo)
       }
     }
 

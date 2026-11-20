@@ -98,6 +98,9 @@ data class EarbudDiagnostics(
   val lastReprimeTimeLabel: String = "Never",
   val forwardedKeyCount: Int = 0,
   val forwardFailureCount: Int = 0,
+  val sessionPlaybackStateLabel: String = "Inactive",
+  val lastStateFlipTimeLabel: String = "Never",
+  val stateFlipCount: Int = 0,
 )
 
 /** Public entry interface for starting, stopping, and observing the earbud listener service. */
